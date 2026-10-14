@@ -4,7 +4,11 @@
 #   1) 只在 `v*` tag 上触发：发布是显式动作，不跟 push 混在一起；
 #   2) 先校验 tag 与 pyproject 版本一致：避免「v0.2.0 的包里是 0.1.0」这种事故；
 #   3) 出包后仍要跑冻结包自测与体积闸门：红灯就不发布；
-#   4) 用 runner 自带的 gh + GITHUB_TOKEN 发布，不引入第三方发布 action。
+#   4) 用 runner 自带的 gh + GITHUB_TOKEN 发布，不引入第三方发布 action；
+#   5) 发布这一步是**幂等**的：同一个 tag 重跑不会因为「Release 已存在」失败，
+#      而是覆盖资产 + 更新说明（失败重跑、补说明都不用先手删 Release）；
+#   6) 也支持 workflow_dispatch，但**必须跑在 tag 上**（第一步就挡掉分支）：
+#      跑在分支上会把分支产物挂到某个 tag 的 Release 下，是事故。
 #
 # 注意：2026-10-14 已在 v0.1.0 上真跑并全绿（12 步，含体积闸门与发布）。
 #       本次真跑暴露了下面 env 里少的那两条，见 docs/p2-verification.md §15。
@@ -13,6 +17,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # 手动触发：不推新 tag 也能重验「生成发布说明 → 发布」这段。
+  # 只能跑在 tag 上 —— 第一步会挡掉分支。
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -34,6 +41,17 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
+      # 放最前面：跑在分支上就直接红在第一步，不浪费十分钟构建。
+      - name: 校验触发方式（必须在 tag 上）
+        shell: pwsh
+        run: |
+          # workflow_dispatch 在 UI/API 上可以选分支：跑在分支上会把分支产物挂到
+          # 某个 tag 的 Release 下。这里直接挡掉。
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            throw "release.yml 必须跑在 tag 上（当前 ref_type=$env:GITHUB_REF_TYPE，ref=$env:GITHUB_REF）"
+          }
+          Write-Host "tag = $env:GITHUB_REF_NAME"
+
       - name: 检出代码
         uses: actions/checkout@v4
 
@@ -143,14 +161,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # 这一整步都在调原生 gh：它的「Release 不存在」与进度输出都写在 stderr。
+          # Windows PowerShell 5.1 在 $ErrorActionPreference='stop' 下会把原生命令的
+          # stderr 变成**终止错误**（2026-10-14 本机实测：`2>&1` 合并也拦不住，直接
+          # threw），所以这里显式放宽，改由每次调用的 $LASTEXITCODE 判成败。
+          $ErrorActionPreference = 'Continue'
+          $tag = $env:GITHUB_REF_NAME
           $installer = (Get-ChildItem dist\installer\*.exe | Select-Object -First 1).FullName
           $zip = (Get-ChildItem dist\portable\*.zip | Select-Object -First 1).FullName
           if (-not $installer) { throw "没找到安装包" }
           if (-not $zip) { throw "没找到免安装 zip" }
-          # 用模板生成的说明（含未签名提醒与真实 SHA-256），不用 --generate-notes：
-          # 自动生成的 changelog 没有这些，用户拿到未签名的 exe 会一脸问号。
-          gh release create $env:GITHUB_REF_NAME --title "MarkItDown Desktop $env:GITHUB_REF_NAME" `
-            --notes-file release-notes.md $installer $zip THIRD-PARTY-NOTICES.md
+          $null = gh release view $tag 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            # 同一个 tag 重跑（或事后补说明）：覆盖资产 + 改说明，不新建 Release。
+            # 先传资产再改说明，这样说明不会先于资产出现。
+            Write-Host "Release $tag 已存在：覆盖资产并更新说明"
+            gh release upload $tag $installer $zip THIRD-PARTY-NOTICES.md --clobber 2>&1 | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "覆盖 Release 资产失败" }
+            gh release edit $tag --title "MarkItDown Desktop $tag" `
+              --notes-file release-notes.md 2>&1 | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "更新 Release 说明失败" }
+          } else {
+            # 用模板生成的说明（含未签名提醒与真实 SHA-256），不用 --generate-notes：
+            # 自动生成的 changelog 没有这些，用户拿到未签名的 exe 会一脸问号。
+            gh release create $tag --title "MarkItDown Desktop $tag" `
+              --notes-file release-notes.md $installer $zip THIRD-PARTY-NOTICES.md 2>&1 | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "创建 Release 失败" }
+          }
 
       - name: 上传构建报告
         if: always()
@@ -163,8 +200,8 @@ jobs:
             release-notes.md
             pyinstaller-build.log
             pyinstaller-build.err.log
-            dist\installer\installer-report.json
-            dist\portable\portable-report.json
+            dist\installer\build-report.json
+            dist\portable\build-report.json
           if-no-files-found: warn
 
       # 必须放在最后：放中间会在前面的步骤失败时被跳过（ci.yml 实测踩过这个坑）。
