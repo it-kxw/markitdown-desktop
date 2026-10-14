@@ -17,7 +17,13 @@ permissions:
   contents: write
 
 env:
+  # 与 ci.yml 同一套设置。2026-10-14 release.yml 首次真跑时少了后两条：
+  # 缺 MAX_ONEFOLDER_MB 就没有体积闸门（与文件头写的设计不符）；
+  # 缺 PYTHONIOENCODING 则 PyInstaller 执行 spec 时那行中文 print 直接抛
+  # UnicodeEncodeError（runner 是 en-US，stdout=cp1252、errors=strict）。
   MDD_TRIM: safe
+  MAX_ONEFOLDER_MB: "213"
+  PYTHONIOENCODING: utf-8
 
 jobs:
   release:
@@ -53,8 +59,27 @@ jobs:
           if ($projectVersion -ne $tagVersion) { throw "版本不一致：tag $tagVersion vs pyproject $projectVersion" }
 
       - name: PyInstaller 打包
+        shell: pwsh
         run: |
-          .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean packaging\markitdown-desktop.spec
+          # 用 Start-Process 把 stdout/stderr 落到文件：
+          #   1) 避免 PowerShell 在 $ErrorActionPreference='stop' 下把原生命令的 stderr
+          #      变成终止错误（本仓已有前例：GUI 子系统的 exe 也走 Start-Process）；
+          #   2) 日志留给最后一步在失败时打成注解（Actions 日志 zip 的域名国内拉不到）。
+          $proc = Start-Process -FilePath ".\.venv\Scripts\python.exe" `
+            -ArgumentList "-m","PyInstaller","--noconfirm","--clean","packaging\markitdown-desktop.spec" `
+            -RedirectStandardOutput pyinstaller-build.log `
+            -RedirectStandardError pyinstaller-build.err.log `
+            -Wait -PassThru -NoNewWindow
+          Get-Content pyinstaller-build.log -Tail 15 -ErrorAction SilentlyContinue
+          if ($proc.ExitCode -ne 0) { throw "PyInstaller 失败（退出码 $($proc.ExitCode)）" }
+
+      - name: 体积闸门
+        shell: pwsh
+        run: |
+          $bytes = (Get-ChildItem dist\markitdown-desktop -Recurse -File | Measure-Object Length -Sum).Sum
+          $mb = [math]::Round($bytes / 1MB, 2)
+          "one-folder = $mb MB（上限 $env:MAX_ONEFOLDER_MB MB）" | Tee-Object -FilePath size-report.txt
+          if ($mb -gt [double]$env:MAX_ONEFOLDER_MB) { throw "体积回退：$mb MB 超过 $env:MAX_ONEFOLDER_MB MB" }
 
       - name: 冻结包自测（用现场生成的夹具）
         shell: pwsh
@@ -99,6 +124,29 @@ jobs:
           name: release-reports
           path: |
             ci-selftest.json
+            size-report.txt
+            pyinstaller-build.log
+            pyinstaller-build.err.log
             dist\installer\installer-report.json
             dist\portable\portable-report.json
           if-no-files-found: warn
+
+      # 必须放在最后：放中间会在前面的步骤失败时被跳过（ci.yml 实测踩过这个坑）。
+      # Actions 日志 zip 存在 pipelines.actions.githubusercontent.com（国内连不通），
+      # 但注解 API 是通的：把失败原因打成 ::error:: 注解，远端就能读到，不必人工贴日志。
+      - name: 汇总失败原因（打成注解）
+        if: failure()
+        shell: pwsh
+        run: |
+          $py = ".\.venv\Scripts\python.exe"
+          if (-not (Test-Path $py)) { Write-Host "::notice::虚拟环境不存在，跳过失败汇总"; exit 0 }
+          foreach ($log in @("pyinstaller-build.err.log", "pyinstaller-build.log")) {
+            if (-not (Test-Path $log)) { continue }
+            $tail = Get-Content $log -Tail 8 | Where-Object { $_ -match '\S' }
+            if (-not $tail) { continue }
+            Write-Host "::group::$log 尾部"
+            Get-Content $log -Tail 25
+            Write-Host "::endgroup::"
+            foreach ($line in $tail) { Write-Host "::error::$log | $($line.Trim())" }
+          }
+          & $py scripts\ci_failures.py --selftest ci-selftest.json

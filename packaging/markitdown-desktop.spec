@@ -27,6 +27,20 @@ import os
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 # --------------------------------------------------------------------------
+# 输出编码兜底（必须在任何 print 之前执行）
+# --------------------------------------------------------------------------
+# spec 是**在 PyInstaller 进程里**被 exec 的，所以 src/markitdown_desktop/console.py
+# 的兜底不会被自动套用；而本文件后面会 print 中文。在 en-US 机器上（stdout=cp1252、
+# errors=strict）那行 print 会抛 UnicodeEncodeError，把整次构建打掉 ——
+# 2026-10-14 的 release.yml 首次真跑就是这么红的（本机 PYTHONIOENCODING=cp1252
+# 已逐字复现，见 docs/p2-verification.md §15）。
+# 复用同一个实现，不另写一份会漂移的副本（探针确认 spec 执行期可 import，
+# 因为 venv 是 `pip install -e .`，src 在 sys.path 上）。
+from markitdown_desktop.console import make_output_safe
+
+make_output_safe()
+
+# --------------------------------------------------------------------------
 # 裁剪规则
 # --------------------------------------------------------------------------
 
