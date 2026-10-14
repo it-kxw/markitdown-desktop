@@ -8,7 +8,10 @@
 #   5) 发布这一步是**幂等**的：同一个 tag 重跑不会因为「Release 已存在」失败，
 #      而是覆盖资产 + 更新说明（失败重跑、补说明都不用先手删 Release）；
 #   6) 也支持 workflow_dispatch，但**必须跑在 tag 上**（第一步就挡掉分支）：
-#      跑在分支上会把分支产物挂到某个 tag 的 Release 下，是事故。
+#      跑在分支上会把分支产物挂到某个 tag 的 Release 下，是事故；
+#   7) 拿到产物后要做**签名回验**（scripts/verify_signature.ps1）：签名没开就明确打印
+#      「本次产物未签名」，开了就必须逐个 Valid，否则整步红。绝不假装签过。
+#      回验放在「生成发布说明」之前：说明里的 SHA-256 必须是最终（已签名）字节的哈希。
 #
 # 注意：2026-10-14 已在 v0.1.0 上真跑并全绿（12 步，含体积闸门与发布）。
 #       本次真跑暴露了下面 env 里少的那两条，见 docs/p2-verification.md §15。
@@ -125,6 +128,34 @@ jobs:
         run: |
           powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -SkipPyInstaller
           powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1 -SkipPyInstaller
+
+      # 签名回验。签名本身（SignPath 路线）暂时没接：接它要先满足「仓库公开 +
+      # SignPath 账号审核通过 + 拿到 organization/project/policy/artifact-configuration
+      # 四个 slug」，见 docs/code-signing.md。所以这一步现在只做一件事：**不假装签过**。
+      # 放在「生成发布说明」之前：说明里的 SHA-256 必须是最终（已签名）字节的哈希。
+      - name: 验证签名
+        shell: pwsh
+        env:
+          MDD_VERIFY_SIGNATURE: ${{ vars.MDD_VERIFY_SIGNATURE }}
+        run: |
+          if ($env:MDD_VERIFY_SIGNATURE -ne 'true') {
+            Write-Host "::notice::签名未开启（仓库变量 MDD_VERIFY_SIGNATURE 不是 true）：本次产物**未签名**，跳过回验。开启步骤见 docs/code-signing.md。"
+            exit 0
+          }
+          $targets = @(
+            (Get-ChildItem dist\markitdown-desktop\markitdown-desktop.exe -ErrorAction SilentlyContinue),
+            (Get-ChildItem dist\portable\MarkItDownDesktop-*\markitdown-desktop.exe -ErrorAction SilentlyContinue),
+            (Get-ChildItem dist\installer\*-setup.exe -ErrorAction SilentlyContinue)
+          ) | Where-Object { $_ } | ForEach-Object { $_.FullName }
+          if ($targets.Count -lt 3) { throw "待验签的产物不全，实际只找到 $($targets.Count) 个" }
+          # 传数组必须用 -Command + @(...)：实测 `-File ... -Path $数组` 会被展开成空格
+          # 分隔的多个 argv，脚本那边直接报「找不到接受实际参数的位置形式参数」。
+          $pathArgs = ($targets | ForEach-Object { "'$_'" }) -join ', '
+          # 调原生 powershell：pwsh 默认 $ErrorActionPreference='stop'，放宽一下，
+          # 免得 ps1 的 stderr 被当成终止性错误（本仓在「发布到 Release」踩过一次）。
+          $ErrorActionPreference = 'Continue'
+          powershell -ExecutionPolicy Bypass -Command "& 'scripts\verify_signature.ps1' -Path @($pathArgs) -JsonReport 'dist\signature-report.json'"
+          if ($LASTEXITCODE -ne 0) { throw "签名校验未通过（退出码 $LASTEXITCODE）" }
 
       - name: 生成发布说明
         shell: pwsh
