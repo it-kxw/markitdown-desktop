@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "markitdown-desktop"
+version = "0.1.0"
+description = "Windows desktop GUI for MarkItDown: drag, convert, save Markdown."
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+authors = [{ name = "KXW" }]
+dependencies = [
+  # 刻意不使用 markitdown[all]：避免 Azure SDK 与 31MB 的 SpeechRecognition
+  "markitdown[pdf,docx,pptx,xlsx,xls,outlook,youtube-transcription]>=0.1.8,<0.2.0",
+  "PySide6-Essentials>=6.8",
+]
+
+[project.optional-dependencies]
+# 音频转写（体积较大，且运行时需要 ffmpeg）
+audio = ["markitdown[audio-transcription]>=0.1.8,<0.2.0"]
+dev = ["pyinstaller>=6.10", "pytest>=8.0", "pytest-qt>=4.4", "pillow>=10.0"]
+
+[project.scripts]
+markitdown-desktop = "markitdown_desktop.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# 让仓库根进入 sys.path，这样 tests 能 import scripts 下的构建脚本；
+# 不靠「必须用 python -m pytest 启动」这种隐含前提（裸 pytest 也要能用）
+pythonpath = ["."]
+# 任何用例挂死时（例如模态框无人点击）自动转储全部线程堆栈并终止进程，
+# 把"静默挂死"变成可见的失败，而不是让 CI 永远转圈
+faulthandler_timeout = 120
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/markitdown_desktop"]

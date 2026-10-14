@@ -1,0 +1,40 @@
+本文件由 MarkItDown Desktop 维护者依据 cobble 项目自身的声明整理，**不是上游仓库的原文**
+（cobble 0.1.4 的 wheel 与 sdist 均未附带任何许可证正文文件，上游仓库根目录也没有）。
+
+依据：
+- cobble README 末尾「License」一节声明：2-Clause BSD
+  （https://github.com/mwilliamson/python-cobble 的 README.rst）
+- 版权行取自上游 setup.py 的 `author='Michael Williamson'`
+- 包元数据 Classifier：`License :: OSI Approved :: BSD License`
+
+另需注意：`cobble/inflection.py` 派生自 inflection 库
+（MIT License, Copyright (c) 2012-2015 Janne Vanhala），其许可证头保留在该源文件顶部。
+
+------------------------------------------------------------------------------
+（以下为 BSD 2-Clause 标准条款正文）
+
+BSD 2-Clause License
+
+Copyright (c) Michael Williamson
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

@@ -1,0 +1,26 @@
+# 构建产物
+build/
+dist/
+dist-*/
+*.spec.bak
+
+# 虚拟环境
+.venv/
+
+# P0 测量报告
+p0-*.json
+run*.json
+devrun*.json
+p0-out/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# CodeGraph 本地索引（每台机器重新生成，不入库）
+.codegraph/
+
+# 保留冻结包验证证据
+!p0-frozen-*.json
