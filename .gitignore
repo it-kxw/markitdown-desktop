@@ -19,6 +19,11 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
+# CI 现场生成的夹具与报告（由 scripts/ci_fixtures.py 产出，不入库）
+.ci-fixtures/
+ci-selftest.json
+size-report.txt
+
 # CodeGraph 本地索引（每台机器重新生成，不入库）
 .codegraph/
 

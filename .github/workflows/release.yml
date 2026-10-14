@@ -1,0 +1,100 @@
+# MarkItDown Desktop —— Release：打 tag 自动出安装包 + 免安装 zip 并挂到 Release
+#
+# 设计要点
+#   1) 只在 `v*` tag 上触发：发布是显式动作，不跟 push 混在一起；
+#   2) 先校验 tag 与 pyproject 版本一致：避免「v0.2.0 的包里是 0.1.0」这种事故；
+#   3) 出包后仍要跑冻结包自测与体积闸门：红灯就不发布；
+#   4) 用 runner 自带的 gh + GITHUB_TOKEN 发布，不引入第三方发布 action。
+#
+# 注意：本工作流尚未实跑验证（没有推过 tag）。首次真发布前请先在测试 tag 上走一遍。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  MDD_TRIM: safe
+
+jobs:
+  release:
+    name: 构建并发布
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: 建虚拟环境并安装依赖
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+
+      - name: 校验 tag 与 pyproject 版本一致
+        shell: pwsh
+        run: |
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          $pyproject = Get-Content pyproject.toml -Raw
+          if ($pyproject -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw "pyproject.toml 里读不到 version" }
+          $projectVersion = $Matches[1]
+          Write-Host "tag = $env:GITHUB_REF_NAME，pyproject = $projectVersion"
+          if ($projectVersion -ne $tagVersion) { throw "版本不一致：tag $tagVersion vs pyproject $projectVersion" }
+
+      - name: PyInstaller 打包
+        run: |
+          .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean packaging\markitdown-desktop.spec
+
+      - name: 冻结包自测（用现场生成的夹具）
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe scripts\ci_fixtures.py generate --out .ci-fixtures
+          $exe = "dist\markitdown-desktop\markitdown-desktop.exe"
+          $files = (Get-ChildItem .ci-fixtures -File).FullName
+          & $exe --selftest $files --offscreen --json ci-selftest.json
+          if ($LASTEXITCODE -ne 0) { throw "冻结包自测失败，退出码 $LASTEXITCODE" }
+          .\.venv\Scripts\python.exe scripts\ci_fixtures.py check ci-selftest.json --dir .ci-fixtures
+
+      - name: 安装 Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: 构建安装包与免安装 zip
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -SkipPyInstaller
+          powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1 -SkipPyInstaller
+
+      - name: 发布到 Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installer = (Get-ChildItem dist\installer\*.exe | Select-Object -First 1).FullName
+          $zip = (Get-ChildItem dist\portable\*.zip | Select-Object -First 1).FullName
+          if (-not $installer) { throw "没找到安装包" }
+          if (-not $zip) { throw "没找到免安装 zip" }
+          gh release create $env:GITHUB_REF_NAME --title "MarkItDown Desktop $env:GITHUB_REF_NAME" `
+            --generate-notes $installer $zip THIRD-PARTY-NOTICES.md
+
+      - name: 上传构建报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-reports
+          path: |
+            ci-selftest.json
+            dist\installer\installer-report.json
+            dist\portable\portable-report.json
+          if-no-files-found: warn

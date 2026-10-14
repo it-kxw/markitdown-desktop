@@ -194,6 +194,20 @@ REM 冒烟矩阵：源码/冻结 × 并发 1/2，逐文件字符数一致性
 .venv\Scripts\python.exe scripts\smoke_matrix.py
 ```
 
+### CI（GitHub Actions）
+
+`.github/workflows/ci.yml`（`windows-latest` + Python 3.12）在每次 push 时：
+
+装依赖 →（仓库含 `tests/` 时才）跑单元测试 → **现场生成 CI 夹具** → PyInstaller 打包 →
+冻结包 `--selftest --offscreen` → 校验每个夹具的转换结果 → **体积闸门**（one-folder ≤ 213 MB）→ 上传报告。
+
+夹具由 `scripts/ci_fixtures.py` 用「运行期已有依赖 + 标准库」现场生成（docx / xlsx / pptx / pdf /
+html / csv / json / xml / txt 共 9 个），**不引入新依赖**，CI 也不依赖仓库里的二进制夹具。
+安装包与免安装 zip 只在手动触发并勾选 `full` 时构建。
+
+打 `v*` tag 时 `.github/workflows/release.yml` 会出安装包 + 免安装 zip 并挂到 Release；
+该工作流**尚未实跑验证**（没有推过 tag），首次真发布前请先用测试 tag 走一遍。
+
 ## 致谢
 
 - [Microsoft MarkItDown](https://github.com/microsoft/markitdown) —— 全部转换能力来自它；
