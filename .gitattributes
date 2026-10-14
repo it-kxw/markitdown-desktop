@@ -1,0 +1,15 @@
+# 行尾策略：**一律不转换**（`-text`）。
+#
+# 为什么不用 `* text=auto`：本仓库的行尾是**故意混合**的 —— 大部分文件是 LF，
+# 但 `src/markitdown_desktop/ui.py`、`packaging/installer.iss`、`scripts/*.ps1`
+# 是 CRLF（`.iss`/`.ps1` 还带 UTF-8 BOM），而 `licenses/**` 里很多文件是从上游
+# 原样搬来的、本来就是 CRLF。统一转换会把它们改掉。
+#
+# 为什么必须钉死：`packaging/licenses/**` 的正文 SHA-256 写死在 `SOURCES.md` 里，
+# 而 GitHub 的 Windows runner 默认 `core.autocrlf=true` —— 检出时 LF 被转成 CRLF，
+# 校验和就全变了。2026-10-14 CI 实测踩过：
+# `test_notices::test_vendored_files_match_sources_md` 报 `cobble.txt` 不一致。
+#
+# 同理，`licenses/**` 是 `THIRD-PARTY-NOTICES.md` 的正文来源，被转换也会让
+# 「已提交通告不过期」那条用例失败。
+* -text
