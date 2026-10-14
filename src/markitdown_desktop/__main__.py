@@ -86,7 +86,18 @@ class _PoolCollector:
 
 
 def _safe_print(text: str) -> None:
-    """窗口化（noconsole）冻结包中 sys.stdout 可能为 None，打印需容错。"""
+    """窗口化（noconsole）冻结包中 sys.stdout 可能为 None，打印需容错。
+
+    中文在 cp1252 控制台（en-US 的 Windows）上会抛 UnicodeEncodeError，
+    所以先给标准流加 `errors="replace"` 兜底（只改错误策略、不改编码）再打印；
+    打印本身失败也不能影响自测结果。
+
+    @author 康小汪【kxw】
+    @date 2026-10-14
+    """
+    from markitdown_desktop.console import make_output_safe
+
+    make_output_safe()
     if sys.stdout is not None:
         try:
             print(text)

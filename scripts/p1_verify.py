@@ -225,4 +225,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # 只在脚本入口导入：模块被测试 import 时不拉重依赖，也不动 pytest 捕获的流
+    from markitdown_desktop.console import make_output_safe
+
+    make_output_safe()
     raise SystemExit(main())

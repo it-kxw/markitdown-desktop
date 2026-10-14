@@ -23,6 +23,7 @@ __pycache__/
 .ci-fixtures/
 ci-selftest.json
 size-report.txt
+pytest-report.xml
 
 # CodeGraph 本地索引（每台机器重新生成，不入库）
 .codegraph/

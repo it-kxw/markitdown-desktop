@@ -28,6 +28,8 @@ env:
   MDD_TRIM: safe
   # one-folder 体积上限（MB）
   MAX_ONEFOLDER_MB: "213"
+  # runner 是 en-US，stdout 默认 cp1252：不钉住 UTF-8，脚本印中文会 UnicodeEncodeError 崩掉
+  PYTHONIOENCODING: utf-8
 
 jobs:
   build:
@@ -56,10 +58,17 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path tests) {
-            .\.venv\Scripts\python.exe -m pytest
+            .\.venv\Scripts\python.exe -m pytest --junitxml=pytest-report.xml
           } else {
             Write-Host "::notice::当前分支不含 tests/（发布分支只带运行所需文件），跳过单元测试"
           }
+
+      # 日志 zip 存在 pipelines.actions.githubusercontent.com（国内连不通），
+      # 但注解 API 是通的：把失败原因打成 ::error:: 注解，远端就能读到，不必人工贴日志
+      - name: 汇总单元测试失败项
+        if: failure()
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe scripts\ci_failures.py pytest-report.xml
 
       - name: 生成 CI 夹具
         run: .\.venv\Scripts\python.exe scripts\ci_fixtures.py generate --out .ci-fixtures
@@ -102,4 +111,5 @@ jobs:
           path: |
             ci-selftest.json
             size-report.txt
+            pytest-report.xml
           if-no-files-found: warn
