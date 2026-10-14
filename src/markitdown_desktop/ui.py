@@ -14,11 +14,21 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
+import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QLibraryInfo, QLocale, Qt, QTimer, QTranslator
-from PySide6.QtGui import QAction, QGuiApplication
+from PySide6.QtCore import (
+    QByteArray,
+    QLibraryInfo,
+    QLocale,
+    Qt,
+    QTimer,
+    QTranslator,
+    QUrl,
+)
+from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -42,6 +52,7 @@ from .i18n import FALLBACK_LANGUAGE, LANGUAGE_AUTO, normalize_language, set_lang
 from .logging_setup import export_logs, log_dir, open_log_dir, tail_log
 from .settings import AppSettings
 from .settings_dialog import SettingsDialog
+from .update_check import STATUS_AVAILABLE, STATUS_LATEST, UpdateResult, check_for_update
 from .worker import ConversionPool, JobSpec, is_retryable
 
 _logger = logging.getLogger(__name__)
@@ -51,6 +62,7 @@ _logger = logging.getLogger(__name__)
 
 _ELAPSED_TICK_MS = 500  # 进度文字里"已用时"的刷新间隔
 _ABOUT_LOG_LINES = 30  # 「关于」对话框里附带多少行日志
+_UPDATE_POLL_MS = 250  # 更新检查结果：后台线程写队列，界面线程按这个间隔来取
 
 
 def _first_line(text: str) -> str:
@@ -166,9 +178,16 @@ class MainWindow(QMainWindow):
         self._elapsed_timer.setInterval(_ELAPSED_TICK_MS)
         self._elapsed_timer.timeout.connect(self._tick_elapsed)
 
+        self._update_running = False  # 同一时刻只允许一次更新检查在跑
+        self._update_results: queue.Queue[tuple[UpdateResult, bool]] = queue.Queue()
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(_UPDATE_POLL_MS)
+        self._update_timer.timeout.connect(self._poll_update_result)
         self._build_ui()
         self._build_menus()
         self._restore_state()
+        if self._settings.check_updates_on_start:
+            self._check_updates(manual=False)  # 后台跑，绝不阻塞启动
 
     # ------------------------------------------------------------------ 界面搭建
 
@@ -262,8 +281,12 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_action)
 
         help_menu = self.menuBar().addMenu(tr("ui.menu.help"))
+        update_action = QAction(tr("ui.menu.check_update"), self)
+        update_action.triggered.connect(lambda: self._check_updates(manual=True))
         about_action = QAction(tr("ui.menu.about"), self)
         about_action.triggered.connect(self._about)
+        help_menu.addAction(update_action)
+        help_menu.addSeparator()
         help_menu.addAction(about_action)
 
     def _restore_state(self) -> None:
@@ -845,6 +868,86 @@ class MainWindow(QMainWindow):
         box.setDetailedText(tail_log(_ABOUT_LOG_LINES) or tr("ui.about.no_logs"))
         box.exec()
 
+    # ------------------------------------------------------------------ 更新检查
+
+    def _check_updates(self, manual: bool) -> None:
+        """发起一次后台更新检查；已有检查在跑就直接复用，不叠加请求。
+
+        网络实测要 5~15 秒，绝不能放在界面线程里（会把窗口冻住）。
+
+        **线程模型是实测选出来的**（见 `_t20_probe4.py`）：
+
+        * QThread 无论有没有父对象，只要进程退出时还在跑，就会让进程 abort（exit 9）；
+        * daemon 线程 + **跳线程 emit Qt 信号**同样不行：跟同进程里的
+          multiprocessing spawn 转换一起跑时，Windows 直接 access violation
+          （tests/test_ui_queue.py 第 12 条必崩，见 tests/test_update_check.py 的守卫）。
+
+        所以最终方案是：线程只把结果放进 `queue.Queue`（纯 Python，与 Qt 无关），
+        界面线程用 QTimer 定时取。线程是 daemon，进程退出时不会卡住。
+
+        Args:
+            manual: 是否用户手动触发（决定要不要弹对话框）。
+
+        @author 康小汪【kxw】
+        @date 2026-10-14
+        """
+        if self._update_running:
+            return
+        self._update_running = True
+        self._update_timer.start()
+        threading.Thread(
+            target=self._run_update_check, args=(manual,), daemon=True, name="update-check"
+        ).start()
+
+    def _run_update_check(self, manual: bool) -> None:
+        """线程体：查一次并把结果放进队列。**这里一行 Qt 代码都不许有**。"""
+        self._update_results.put((check_for_update(), manual))
+
+    def _poll_update_result(self) -> None:
+        """界面线程定时取一次结果；队列为空就继续等。"""
+        try:
+            result, manual = self._update_results.get_nowait()
+        except queue.Empty:
+            return
+        self._update_timer.stop()
+        self._update_running = False
+        self._status.setText(self._update_status_text(result))
+        if manual:
+            self._show_update_dialog(result)
+
+    @staticmethod
+    def _update_status_text(result: UpdateResult) -> str:
+        """状态栏文案：三态各一句，自动检查时不打扰用户。"""
+        if result.status == STATUS_AVAILABLE:
+            return tr("ui.status.update_available", version=result.latest or "")
+        if result.status == STATUS_LATEST:
+            return tr("ui.status.update_latest", version=result.current)
+        return tr("ui.status.update_unknown")
+
+    def _show_update_dialog(self, result: UpdateResult) -> None:
+        """手动检查的结果对话框；有新版时额外给一个「打开发布页」按钮。"""
+        box = QMessageBox(self)
+        box.setWindowTitle(tr("ui.update.title"))
+        if result.status == STATUS_AVAILABLE:
+            box.setText(
+                tr("ui.update.available", current=result.current, latest=result.latest or "")
+            )
+            open_btn = box.addButton(tr("ui.update.open"), QMessageBox.ButtonRole.ActionRole)
+            open_btn.clicked.connect(lambda: self._open_release_page(result.url, box))
+        elif result.status == STATUS_LATEST:
+            box.setText(tr("ui.update.latest", current=result.current))
+        else:
+            box.setText(tr("ui.update.unknown"))
+        box.addButton(tr("ui.update.close"), QMessageBox.ButtonRole.AcceptRole)
+        box.exec()
+
+    @staticmethod
+    def _open_release_page(url: str | None, box: QMessageBox) -> None:
+        """在浏览器里打开发布页并关掉对话框；地址为空时只关对话框。"""
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+        box.accept()
+
     # ------------------------------------------------------------------ 关闭
 
     def closeEvent(self, event) -> None:  # noqa: ANN001 - Qt 回调
@@ -866,6 +969,9 @@ class MainWindow(QMainWindow):
                     event.ignore()
                     return
             self._pool.shutdown()
+        # 关窗就停掉更新检查的轮询：窗口可能还活着（GC 未到），不该继续每 250 ms 醒一次。
+        # 后台那个 daemon 线程不用管：它只往队列里写一个结果，进程退出时自生自灭。
+        self._update_timer.stop()
         self._settings.window_geometry = bytes(self.saveGeometry())
         self._settings.splitter_state = bytes(self._splitter.saveState())
         self._settings.sync()

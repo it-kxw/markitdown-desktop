@@ -166,6 +166,19 @@ class AppSettings:
         self._s.setValue("auto_save", bool(value))
 
     @property
+    def check_updates_on_start(self) -> bool:
+        """启动时是否检查更新（默认开）。关掉后不发任何网络请求。
+
+        @author 康小汪【kxw】
+        @date 2026-10-14
+        """
+        return self._s.value("check_updates_on_start", True, type=bool)
+
+    @check_updates_on_start.setter
+    def check_updates_on_start(self, value: bool) -> None:
+        self._s.setValue("check_updates_on_start", bool(value))
+
+    @property
     def language(self) -> str:
         """界面语言：`auto`（跟随系统）/ `zh_CN` / `en`；非法值回退 auto。
 

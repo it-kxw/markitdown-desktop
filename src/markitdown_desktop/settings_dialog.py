@@ -53,7 +53,7 @@ from .settings import (
 
 
 class SettingsDialog(QDialog):
-    """设置对话框：输出目录 / 命名策略 / 并发度 / 自动写出 / 界面语言。
+    """设置对话框：输出目录 / 命名策略 / 并发度 / 自动写出 / 界面语言 / 启动时检查更新。
 
     Args:
         settings: 被编辑的设置对象；**只在点「确定」时写回**。
@@ -100,6 +100,8 @@ class SettingsDialog(QDialog):
         self._spin.setToolTip(tr("dlg.concurrency_tip"))
 
         self._auto_save = QCheckBox(tr("dlg.auto_save"))
+        self._check_updates = QCheckBox(tr("dlg.check_updates"))
+        self._check_updates.setToolTip(tr("dlg.check_updates_tip"))
 
         # itemData 存的是普通字符串（语言码），不存在 str 子类退化问题
         self._lang_box = QComboBox()
@@ -112,6 +114,7 @@ class SettingsDialog(QDialog):
         form.addRow(tr("dlg.policy_label"), self._policy_box)
         form.addRow(tr("dlg.concurrency_label"), self._spin)
         form.addRow("", self._auto_save)
+        form.addRow("", self._check_updates)
         form.addRow(tr("dlg.language_label"), self._lang_box)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -150,6 +153,7 @@ class SettingsDialog(QDialog):
         self._policy_box.setCurrentIndex(max(index, 0))  # findData 失配时退回第一项
         self._spin.setValue(settings.concurrency)
         self._auto_save.setChecked(settings.auto_save)
+        self._check_updates.setChecked(settings.check_updates_on_start)
         self._lang_box.setCurrentIndex(max(self._lang_box.findData(settings.language), 0))
 
     def _on_same_dir_toggled(self, checked: bool) -> None:
@@ -188,6 +192,7 @@ class SettingsDialog(QDialog):
         self._policy_box.setCurrentIndex(self._policy_box.findData(NamingPolicy.SUFFIX.value))
         self._spin.setValue(DEFAULT_CONCURRENCY)
         self._auto_save.setChecked(True)
+        self._check_updates.setChecked(True)
         self._lang_box.setCurrentIndex(self._lang_box.findData(LANGUAGE_AUTO))
 
     def _policy_value(self) -> NamingPolicy:
@@ -226,7 +231,7 @@ class SettingsDialog(QDialog):
         return self._dir_edit.text().strip() or None
 
     def accept(self) -> None:
-        """校验后一次写回五个字段；输出目录无效则提示并留在对话框里。
+        """校验后一次写回六个字段；输出目录无效则提示并留在对话框里。
 
         字段一起写：用户点的是「确定」，不该出现"改了一半"的中间状态。
 
@@ -245,5 +250,6 @@ class SettingsDialog(QDialog):
         self._settings.naming_policy = self._policy_value()
         self._settings.concurrency = self._spin.value()
         self._settings.auto_save = self._auto_save.isChecked()
+        self._settings.check_updates_on_start = self._check_updates.isChecked()
         self._settings.language = self._language_value()
         super().accept()
