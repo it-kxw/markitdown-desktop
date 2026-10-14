@@ -6,7 +6,8 @@
 #   3) 出包后仍要跑冻结包自测与体积闸门：红灯就不发布；
 #   4) 用 runner 自带的 gh + GITHUB_TOKEN 发布，不引入第三方发布 action。
 #
-# 注意：本工作流尚未实跑验证（没有推过 tag）。首次真发布前请先在测试 tag 上走一遍。
+# 注意：2026-10-14 已在 v0.1.0 上真跑并全绿（12 步，含体积闸门与发布）。
+#       本次真跑暴露了下面 env 里少的那两条，见 docs/p2-verification.md §15。
 name: Release
 
 on:
@@ -17,10 +18,12 @@ permissions:
   contents: write
 
 env:
-  # 与 ci.yml 同一套设置。2026-10-14 release.yml 首次真跑时少了后两条：
+  # 与 ci.yml 同一套设置。2026-10-14 release.yml 首次真跑时少了后两条，当场红在
+  # 「PyInstaller 打包」：
   # 缺 MAX_ONEFOLDER_MB 就没有体积闸门（与文件头写的设计不符）；
   # 缺 PYTHONIOENCODING 则 PyInstaller 执行 spec 时那行中文 print 直接抛
   # UnicodeEncodeError（runner 是 en-US，stdout=cp1252、errors=strict）。
+  # 补上后已重跑全绿，portable 93.22 MB / setup 64.36 MB，两条都在约束内。
   MDD_TRIM: safe
   MAX_ONEFOLDER_MB: "213"
   PYTHONIOENCODING: utf-8
@@ -128,7 +131,11 @@ jobs:
           }
           foreach ($key in $map.Keys) { $notes = $notes.Replace($key, [string]$map[$key]) }
           if ($notes -match '\{\{[A-Z0-9_]+\}\}') { throw "发布说明里还有没被替换的占位符" }
-          Set-Content release-notes.md -Value $notes -Encoding utf8
+          # 显式写成**不带 BOM** 的 UTF-8：`Set-Content -Encoding utf8` 在 Windows
+          # PowerShell 5.1 上会带 BOM（发布说明开头多个乱码字符）、在 pwsh 7 上不带。
+          # 写死成与 PowerShell 版本无关的写法。
+          $notesPath = Join-Path $PWD "release-notes.md"
+          [System.IO.File]::WriteAllText($notesPath, $notes, (New-Object System.Text.UTF8Encoding $false))
           Get-Content release-notes.md -TotalCount 10
 
       - name: 发布到 Release
