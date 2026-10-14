@@ -26,6 +26,7 @@ size-report.txt
 pytest-report.xml
 pyinstaller-build.log
 pyinstaller-build.err.log
+/release-notes.md
 
 # CodeGraph 本地索引（每台机器重新生成，不入库）
 .codegraph/

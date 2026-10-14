@@ -105,6 +105,32 @@ jobs:
           powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -SkipPyInstaller
           powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1 -SkipPyInstaller
 
+      - name: 生成发布说明
+        shell: pwsh
+        run: |
+          # 把 packaging\release-notes.md 这份模板里的 {{...}} 占位符，用真实产物的
+          # 体积与 SHA-256 填掉，再交给 `gh release create --notes-file`。
+          # 模板里打错一个占位符，下面的「还有没被替换的占位符」会当场 throw。
+          # 体积与校验值都从**真实产物**算，不手写：说明里的数字不可能与实际不一致。
+          $setup = Get-ChildItem dist\installer\*.exe | Select-Object -First 1
+          $zip = Get-ChildItem dist\portable\*.zip | Select-Object -First 1
+          if (-not $setup) { throw "没找到安装包" }
+          if (-not $zip) { throw "没找到免安装 zip" }
+          $notes = Get-Content packaging\release-notes.md -Raw -Encoding UTF8
+          $map = [ordered]@{
+            "{{TAG}}"             = $env:GITHUB_REF_NAME
+            "{{SETUP_NAME}}"      = $setup.Name
+            "{{SETUP_MB}}"        = [math]::Round($setup.Length / 1MB, 2)
+            "{{SETUP_SHA256}}"    = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
+            "{{PORTABLE_NAME}}"   = $zip.Name
+            "{{PORTABLE_MB}}"     = [math]::Round($zip.Length / 1MB, 2)
+            "{{PORTABLE_SHA256}}" = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
+          }
+          foreach ($key in $map.Keys) { $notes = $notes.Replace($key, [string]$map[$key]) }
+          if ($notes -match '\{\{[A-Z0-9_]+\}\}') { throw "发布说明里还有没被替换的占位符" }
+          Set-Content release-notes.md -Value $notes -Encoding utf8
+          Get-Content release-notes.md -TotalCount 10
+
       - name: 发布到 Release
         shell: pwsh
         env:
@@ -114,8 +140,10 @@ jobs:
           $zip = (Get-ChildItem dist\portable\*.zip | Select-Object -First 1).FullName
           if (-not $installer) { throw "没找到安装包" }
           if (-not $zip) { throw "没找到免安装 zip" }
+          # 用模板生成的说明（含未签名提醒与真实 SHA-256），不用 --generate-notes：
+          # 自动生成的 changelog 没有这些，用户拿到未签名的 exe 会一脸问号。
           gh release create $env:GITHUB_REF_NAME --title "MarkItDown Desktop $env:GITHUB_REF_NAME" `
-            --generate-notes $installer $zip THIRD-PARTY-NOTICES.md
+            --notes-file release-notes.md $installer $zip THIRD-PARTY-NOTICES.md
 
       - name: 上传构建报告
         if: always()
@@ -125,6 +153,7 @@ jobs:
           path: |
             ci-selftest.json
             size-report.txt
+            release-notes.md
             pyinstaller-build.log
             pyinstaller-build.err.log
             dist\installer\installer-report.json
