@@ -61,9 +61,13 @@ jobs:
         run: |
           .\.venv\Scripts\python.exe scripts\ci_fixtures.py generate --out .ci-fixtures
           $exe = "dist\markitdown-desktop\markitdown-desktop.exe"
-          $files = (Get-ChildItem .ci-fixtures -File).FullName
-          & $exe --selftest $files --offscreen --json ci-selftest.json
-          if ($LASTEXITCODE -ne 0) { throw "冻结包自测失败，退出码 $LASTEXITCODE" }
+          # GUI 子系统（console=False）：`& $exe` 不会被等待、也不设 $LASTEXITCODE，
+          # 必须用 Start-Process -Wait -PassThru（与 ci.yml 同一处理，见 p2-verification §14.7）
+          $cliArgs = @("--selftest") + (Get-ChildItem .ci-fixtures -File).FullName +
+                     @("--offscreen", "--json", "ci-selftest.json")
+          $quoted = ($cliArgs | ForEach-Object { '"' + $_ + '"' }) -join " "
+          $proc = Start-Process -FilePath $exe -ArgumentList $quoted -Wait -PassThru -NoNewWindow
+          if ($proc.ExitCode -ne 0) { throw "冻结包自测失败，退出码 $($proc.ExitCode)" }
           .\.venv\Scripts\python.exe scripts\ci_fixtures.py check ci-selftest.json --dir .ci-fixtures
 
       - name: 安装 Inno Setup
