@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     from markitdown_desktop.engine import ConversionOutcome
     from markitdown_desktop.ui import MainWindow
 
+from markitdown_desktop._compat import icon_path
+
 T_PROCESS_START = time.perf_counter()
 
 # 自测模式可选值：inproc = 进程内转换（P0 基准），pool = 子进程池（发布版实际路径）
@@ -320,6 +322,28 @@ def _open_window(app: QApplication, timings: dict[str, float]) -> MainWindow:
     return window
 
 
+def _apply_app_icon(app: QApplication) -> None:
+    """给整个应用设置窗口图标（任务栏与 Alt-Tab 显示的就是它）。
+
+    exe 自身的图标由 PyInstaller 依据 spec 的 `icon=` 写进 PE 资源，与这里无关；
+    这里解决的是「窗口图标」—— 不设的话任务栏显示 Qt 的通用图标。
+
+    @author 康小汪【kxw】
+    @date 2026-10-15
+
+    Args:
+        app: 已经创建好的 QApplication。
+
+    Returns:
+        None: 图标文件读不到时静默跳过，不影响启动。
+    """
+    from PySide6.QtGui import QIcon
+
+    path = icon_path()
+    if path.is_file():
+        app.setWindowIcon(QIcon(str(path)))
+
+
 def _run_selftest(
     files: list[str],
     json_path: str | None,
@@ -354,6 +378,7 @@ def _run_selftest(
     t = time.perf_counter()
     app = QApplication.instance() or QApplication(sys.argv[:1])
     timings["qt_init"] = round(time.perf_counter() - t, 3)
+    _apply_app_icon(app)
     window = _open_window(app, timings)
 
     # pool 模式不建父进程引擎（发布版路径），子进程成本另由 pool_* 两个字段量化；
@@ -445,6 +470,7 @@ def main(argv: list[str] | None = None) -> int:
     from markitdown_desktop.ui import MainWindow
 
     app = QApplication(sys.argv)
+    _apply_app_icon(app)
     window = MainWindow()
     window.show()
     return app.exec()

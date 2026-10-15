@@ -42,6 +42,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 UninstallDisplayName={#AppName}
+; 应用图标：与 exe 同一份，由 scripts\make_icon.py 从 packaging\icon\app-icon.svg 生成
+SetupIconFile={#RepoRoot}\packaging\icon\app-icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 ; 输出到仓库根的 dist\installer（相对路径基于本脚本所在目录）
 OutputDir=..\dist\installer

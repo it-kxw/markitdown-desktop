@@ -159,6 +159,9 @@ datas = list(magika_datas)
 datas += copy_metadata("markitdown")
 datas += copy_metadata("markitdown-desktop")
 datas += _collect_legal_docs()
+# 图标文件本身也要进包：exe 的图标由上面的 icon= 写进 PE 资源，但**运行时窗口图标**
+# 需要能读到文件（任务栏 / Alt-Tab），所以随 data 一起打包到 _internal 根。
+datas.append((os.path.join(PROJECT_ROOT, "packaging", "icon", "app-icon.ico"), "."))
 
 binaries = list(magika_binaries)
 
@@ -252,6 +255,10 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
+    # 应用图标（PE 资源里的那个）：由 scripts/make_icon.py 从
+    # packaging/icon/app-icon.svg 生成，共 7 个尺寸。写成绝对路径，
+    # 避免 spec 被从别的目录调用时解析不到。
+    icon=os.path.join(PROJECT_ROOT, "packaging", "icon", "app-icon.ico"),
     name="markitdown-desktop",
     debug=False,
     bootloader_ignore_signals=False,

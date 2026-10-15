@@ -42,8 +42,12 @@ PySide6-Essentials 6.12.0 + pandas 3.0.6 + six 1.17.0，只要 PySide6 先于 pa
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 _APPLIED = False
+# 应用图标文件名：冻结包内位于 _MEIPASS 根（PyInstaller 把 datas 的 "." 目标放进
+# _internal），源码运行时位于 packaging/icon/ 下。见 icon_path()。
+_ICON_FILENAME = "app-icon.ico"
 
 
 def _patch_six_importer_repr() -> bool:
@@ -79,3 +83,19 @@ def preload_heavy_deps() -> None:
     if patched:
         # 正常路径（six 已安装且补丁生效）
         assert hasattr(sys.modules["six"]._importer, "_path")
+
+
+def icon_path() -> Path:
+    """返回应用图标 ICO 的路径：冻结包取 _MEIPASS，源码运行取仓库 packaging/icon。
+
+    @author 康小汪【kxw】
+    @date 2026-10-15
+
+    Returns:
+        Path: 图标路径。注意调用方仍需自行判断 `is_file()`：源码直跑或精简环境下
+        文件可能不存在，此时应静默跳过而不是让界面起不来。
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / _ICON_FILENAME
+    return Path(__file__).resolve().parents[2] / "packaging" / "icon" / _ICON_FILENAME

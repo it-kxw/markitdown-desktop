@@ -28,7 +28,7 @@ from PySide6.QtCore import (
     QTranslator,
     QUrl,
 )
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
+from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from ._compat import icon_path
 from .engine import ConversionEngine, ConversionOutcome
 from .i18n import FALLBACK_LANGUAGE, LANGUAGE_AUTO, normalize_language, set_language, tr
 from .logging_setup import export_logs, log_dir, open_log_dir, tail_log
@@ -863,6 +864,10 @@ class MainWindow(QMainWindow):
         """「关于」：版本、日志目录，日志末尾放进"详细信息"里按需展开。"""
         box = QMessageBox(self)
         box.setWindowTitle(tr("ui.about.title"))
+        # 应用图标：与任务栏 / exe 同一份（读不到就跳过，不影响关于框）
+        icon_file = icon_path()
+        if icon_file.is_file():
+            box.setIconPixmap(QPixmap(str(icon_file)))
         box.setText(f"MarkItDown Desktop {__version__}")
         box.setInformativeText(tr("ui.about.log_dir", path=log_dir()))
         box.setDetailedText(tail_log(_ABOUT_LOG_LINES) or tr("ui.about.no_logs"))
