@@ -24,18 +24,34 @@
         目录签名而不是嵌入签名，本脚本不该拿来验这类文件；
       * 本脚本不校验「有没有时间戳」，只把时间戳者打印出来供人看。
 
+    2026-10-15 加固（起因是线上一次红灯，不是凭空的「更健壮」）：
+      * 现象：tests/test_verify_signature.py 在 GitHub runner 上偶发 2 条失败
+        （报告 schema 与未签名用例），报告文件**根本没生成**，测试读到 {}，
+        failure 里只剩下 set() / KeyError: 'all_passed'，看不出任何原因。
+      * 机制（本机已确定性复现，探针数据见 docs/p2-verification.md）：目标文件被
+        另一个进程持有时，Get-AuthenticodeSignature 抛 IOException「文件正由另一
+        进程使用」。脚本当时没有 try/catch，于是**在写报告之前就终止**——报告丢了，
+        失败原因也一起丢了。runner 上具体是谁占用文件未证实（CI 日志域名国内不可达）。
+      * 现在：单个文件取签名失败不再终止脚本，而是产出一条 Status=Error 的记录
+        （Message = 异常类型 + 首行，截断 200 字符），报告照写、总体判不通过。
+        「验签脚本自己挂了却看起来什么都没发生」是最坏的结果，宁可留下可读的错误。
+
 .PARAMETER Path
     要校验的文件路径，可以传多个。
 
 .PARAMETER JsonReport
     可选：把每条结果写成 JSON（UTF-8 **不带 BOM**），便于 CI 归档。
 
+    报告里每个文件的字段（**只增不改**）：Path / Exists / Status / SignatureType /
+    Signer / TimeStamper / Passed / Message。Status 只认 Valid 为通过，另外两个
+    自定义值是 FileNotFound（路径没找到）与 Error（取签名时抛了异常）。
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -Command "& 'scripts\verify_signature.ps1' -Path @('dist\markitdown-desktop\markitdown-desktop.exe', 'dist\installer\MarkItDownDesktop-0.1.0-setup.exe')"
 
 .NOTES
     @author 康小汪【kxw】
-    @date 2026-10-14
+    @date 2026-10-14（初版）/ 2026-10-15（异常不再丢报告）
 #>
 [CmdletBinding()]
 param(
@@ -53,34 +69,65 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# 单个文件的校验结果。Status=FileNotFound 是我们自己造的状态，与 .NET 的枚举区分开。
+# 结果记录统一由这里构造：字段集合永远一致（schema 只增不改），Passed 只认 Valid。
+function New-SignatureRecord {
+    <#
+    .SYNOPSIS  构造一条校验结果记录。
+    .PARAMETER Status   .NET 的枚举值，或我们自定义的 FileNotFound / Error。
+    .PARAMETER Message  取签名失败时的原因（异常类型 + 首行），正常情况下为空。
+    .NOTES     @author 康小汪【kxw】 @date 2026-10-15
+    #>
+    param(
+        [string] $FilePath,
+        [bool]   $Exists,
+        [string] $Status,
+        [string] $SignatureType = '',
+        [string] $Signer = '',
+        [string] $TimeStamper = '',
+        [string] $Message = ''
+    )
+
+    [pscustomobject]@{
+        Path          = $FilePath
+        Exists        = $Exists
+        Status        = $Status
+        SignatureType = $SignatureType
+        Signer        = $Signer
+        TimeStamper   = $TimeStamper
+        Passed        = ($Status -eq 'Valid')
+        Message       = $Message
+    }
+}
+
+# 单个文件的校验结果。Status=FileNotFound / Error 是我们自己造的状态，与 .NET 的枚举区分开。
 function Get-SignatureResult {
     <#
     .SYNOPSIS  校验单个文件并返回一条结果记录。
     .PARAMETER FilePath  文件路径。
-    .OUTPUTS   PSCustomObject：Path / Exists / Status / SignatureType / Signer / TimeStamper / Passed
-    .NOTES     @author 康小汪【kxw】 @date 2026-10-14
+    .OUTPUTS   PSCustomObject：Path / Exists / Status / SignatureType / Signer / TimeStamper / Passed / Message
+    .NOTES     @author 康小汪【kxw】 @date 2026-10-14（初版）/ 2026-10-15（异常不再丢报告）
     #>
     param([string] $FilePath)
 
     # 文件不存在时不要抛异常：CI 里更希望看到「哪个路径没找到」这种可读结论，而不是堆栈。
-    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
-        return [pscustomobject]@{
-            Path = $FilePath; Exists = $false; Status = 'FileNotFound'
-            SignatureType = ''; Signer = ''; TimeStamper = ''; Passed = $false
+    try {
+        if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+            return New-SignatureRecord -FilePath $FilePath -Exists $false -Status 'FileNotFound'
         }
+        $signature = Get-AuthenticodeSignature -LiteralPath $FilePath
+    } catch {
+        # 取签名抛异常（例如文件被别的进程占用 -> IOException）时也必须留下记录：
+        # 否则脚本会在写报告之前终止，报告与失败原因一起丢（线上就是这么红的）。
+        $firstLine = @(([string] $_.Exception.Message) -split "`r?`n")[0]
+        if ($firstLine.Length -gt 200) { $firstLine = $firstLine.Substring(0, 200) }
+        $reason = '{0}: {1}' -f $_.Exception.GetType().Name, $firstLine
+        return New-SignatureRecord -FilePath $FilePath -Exists $true -Status 'Error' -Message $reason
     }
 
-    $signature = Get-AuthenticodeSignature -LiteralPath $FilePath
-    [pscustomobject]@{
-        Path          = $FilePath
-        Exists        = $true
-        Status        = [string] $signature.Status
-        SignatureType = [string] $signature.SignatureType
-        Signer        = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '' }
-        TimeStamper   = if ($signature.TimeStamperCertificate) { $signature.TimeStamperCertificate.Subject } else { '' }
-        Passed        = ($signature.Status -eq 'Valid')
-    }
+    $signer = if ($signature.SignerCertificate) { [string] $signature.SignerCertificate.Subject } else { '' }
+    $stamper = if ($signature.TimeStamperCertificate) { [string] $signature.TimeStamperCertificate.Subject } else { '' }
+    New-SignatureRecord -FilePath $FilePath -Exists $true -Status ([string] $signature.Status) `
+        -SignatureType ([string] $signature.SignatureType) -Signer $signer -TimeStamper $stamper
 }
 
 # 把每条结果打到日志里：不管过没过都打全，红灯时不用再去猜是哪一项不合格。
@@ -97,6 +144,7 @@ function Show-SignatureResults {
         Write-Host ("{0}  {1}" -f $mark, $item.Path)
         Write-Host ("        状态={0}  类型={1}" -f $item.Status, $item.SignatureType)
         if (-not $item.Exists)    { Write-Host '        原因=文件不存在（签名无从谈起）' }
+        if ($item.Message)        { Write-Host ("        异常={0}" -f $item.Message) }
         if ($item.Signer)         { Write-Host ("        签名者={0}" -f $item.Signer) }
         if ($item.TimeStamper)    { Write-Host ("        时间戳者={0}" -f $item.TimeStamper) }
     }
