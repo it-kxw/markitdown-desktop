@@ -15,8 +15,11 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import subprocess
+import sys
 import threading
 import time
+from typing import Final
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -28,8 +31,9 @@ from PySide6.QtCore import (
     QTranslator,
     QUrl,
 )
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QPixmap
+from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -42,6 +46,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -49,14 +54,50 @@ from PySide6.QtWidgets import (
 from . import __version__
 from ._compat import icon_path
 from .engine import ConversionEngine, ConversionOutcome
+from .icons import icon_for
 from .i18n import FALLBACK_LANGUAGE, LANGUAGE_AUTO, normalize_language, set_language, tr
 from .logging_setup import export_logs, log_dir, open_log_dir, tail_log
 from .settings import AppSettings
 from .settings_dialog import SettingsDialog
+from .theme import apply_theme, watch_system_theme
 from .update_check import STATUS_AVAILABLE, STATUS_LATEST, UpdateResult, check_for_update
 from .worker import ConversionPool, JobSpec, is_retryable
 
 _logger = logging.getLogger(__name__)
+
+
+def _status_prefix(text: str) -> str:
+    """从条目文本里取出状态前缀（emoji 标记优先，否则取第一段）。
+
+    为什么要"反推"而不是另存一份状态：`QListWidgetItem` 的文本本来就是状态的唯一真相
+    （22 处测试都在读它），再存一份状态就有两个真相、迟早漂移。切主题时重刷颜色
+    只需要知道"这一行是哪种终态"，从文本里认出来最省事。
+
+    Args:
+        text: 条目文本，形如 `✅ 成功  报告.pdf`。
+
+    Returns:
+        str: 用于 `_STATUS_TO_COLOR` 判定的前缀；认不出时返回空串（按默认色处理）。
+
+    @author 康小汪【kxw】
+    @date 2026-10-15
+    """
+    for marker, _ in _STATUS_TO_COLOR:
+        if text.startswith(marker):
+            return marker
+    return ""
+
+#: 队列条目的状态配色：按主题取色，避免"深色主题里用深灰字"这类看不清的问题。
+#: 键与 theme 的语义色一致；`ok`/`warn`/`fail` 与 i18n 里的三种终态一一对应。
+_STATUS_COLORS: Final = {
+    "light": {"fg_3": "#64748B", "ok": "#15803D", "warn": "#B45309", "fail": "#DC2626"},
+    "dark": {"fg_3": "#8A8A8A", "ok": "#4ADE80", "warn": "#FBBF24", "fail": "#F87171"},
+}
+
+#: 状态文字前缀 → 配色键。用 startswith 判定：文案由 i18n 提供，可能带修饰词。
+_STATUS_TO_COLOR: Final = (
+    ("✅", "ok"), ("⚠️", "warn"), ("❌", "fail"),
+)
 
 # 队列条目的状态文案走 i18n 表（键见 i18n.py）：一眼能分清"没转 / 在转 / 转成功但没内容 / 失败"。
 # 不再用模块级常量：语言能在运行时切换，常量会在切完语言后留下旧文案。
@@ -144,6 +185,32 @@ def apply_language(code: str) -> str:
     return language
 
 
+def apply_theme_checked(theme: str) -> str:
+    """套用主题；**失败不许拖垮启动**。
+
+    为什么需要它：设置文件是外部输入，主题值可能是垃圾；另外 QSS 若含非法语法，
+    Qt 只会打印警告不会抛异常，但万一将来换实现抛了，窗口卡在启动前用户什么都看不到。
+    所以这里兜住异常并回退浅色 —— 界面难看总好过打不开。
+
+    Args:
+        theme: `auto` / `light` / `dark`（非法值由 theme 层回退 auto）。
+
+    Returns:
+        str: 实际生效的主题（`light` / `dark`）。
+
+    @author 康小汪【kxw】
+    @date 2026-10-15
+    """
+    app = QApplication.instance()
+    if app is None:  # 没有应用实例时（例如被当库调用）直接给个确定值
+        return "light"
+    try:
+        return apply_theme(app, theme)
+    except Exception:  # noqa: BLE001 - 主题不该成为启动失败的来源
+        _logger.exception("套用主题失败，回退浅色")
+        return "light"
+
+
 class MainWindow(QMainWindow):
     """主窗口：队列、进度、预览与设置持久化。
 
@@ -163,6 +230,7 @@ class MainWindow(QMainWindow):
 
         self._settings = settings or AppSettings()
         apply_language(self._settings.language)  # 建控件之前定好语言，避免中英混排
+        self._theme = apply_theme_checked(self._settings.theme)  # 建控件前套用主题
         # 父进程不再构造 MarkItDown 实例（转换在子进程里做），
         # 省下 magika/onnxruntime 模型加载的时间与内存
         self._outcomes: dict[int, ConversionOutcome] = {}
@@ -187,28 +255,130 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_menus()
         self._restore_state()
+        self._sync_left_stack()  # 启动时队列为空 → 立刻显示空状态卡
+        # 跟随系统配色（仅 auto 模式生效）；离屏环境下信号不触发，测试直接调回调
+        self._theme_watch_installed = watch_system_theme(self._on_system_theme_changed)
         if self._settings.check_updates_on_start:
             self._check_updates(manual=False)  # 后台跑，绝不阻塞启动
 
     # ------------------------------------------------------------------ 界面搭建
 
     def _build_ui(self) -> None:
-        """搭建左侧队列、右侧预览与底部进度条。
+        """搭建：顶部动作条 → 主体（队列 | 预览）→ 底部进度与状态。
+
+        布局顺序变了（原来 7 个按钮挤在左栏底部两排），但**控件属性名与类型一个没动**：
+        测试用 `_list` / `_retry_btn` / `_preview` / `_progress` / `_status` 定位，
+        改名会连带 100+ 处引用一起红。
 
         @author 康小汪【kxw】
-        @date 2026-10-13
+        @date 2026-10-13（初版）、2026-10-15（B2：两排按钮改为一条动作条）
         """
         self._list = QListWidget()
         self._list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self._list.currentRowChanged.connect(self._show_preview)
 
+        self._preview = QPlainTextEdit()
+        self._preview.setReadOnly(True)
+        self._preview.setPlaceholderText(tr("ui.preview.placeholder"))
+        self._preview.setProperty("role", "preview")
+
+        self._progress = QProgressBar()
+        self._progress.setValue(0)
+        self._progress.setTextVisible(False)  # 进度改由状态标签用文字表达，条只表达比例
+        self._status = QLabel(tr("ui.status.ready"))
+        self._status.setObjectName("statusLabel")
+
+        toolbar = self._build_toolbar()
+        body = QSplitter(Qt.Orientation.Horizontal)
+        body.addWidget(self._build_left_pane())
+        body.addWidget(self._build_preview_pane())
+        body.setSizes([396, 604])  # 与原型一致的 5:7 非对称
+        self._splitter = body
+
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(8)
+        layout.addWidget(toolbar)
+        layout.addWidget(body, 1)
+        layout.addWidget(self._build_footer())
+        self.setCentralWidget(central)
+
+    def _build_footer(self) -> QWidget:
+        """底部：左侧状态文字（占满剩余宽度）+ 右侧细进度条。
+
+        刻意不做成 `QStatusBar`：原实现把状态放在中央控件的布局里，
+        换容器会牵动 `_restore_state` 与既有测试，收益不值这个风险。
+
+        Returns:
+            QWidget: 底部容器。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        footer = QWidget()
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(10)
+        footer_layout.addWidget(self._status, 1)
+        footer_layout.addWidget(self._progress)
+        return footer
+
+    def _build_toolbar(self) -> QWidget:
+        """顶部动作条：一个主 CTA + 次级动作 + 右侧降级动作与计数。
+
+        「每屏只有一个主按钮」是工具规则 `primary-action` 的硬要求：
+        原来的布局里 7 个按钮权重相同，用户看不出该点哪个。
+
+        Returns:
+            QWidget: 动作条容器。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        leading, trailing = self._build_actions()
+        self._count_label = QLabel(tr("ui.count.zero"))
+        self._count_label.setProperty("role", "chip")  # QSS 胶囊样式靠这个属性
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        for btn in leading:
+            row.addWidget(btn)
+        row.addStretch(1)
+        row.addWidget(self._count_label)
+        for flat_btn in trailing:
+            flat_btn.setProperty("flat", True)  # 降级为「无边框」，权重低于主 CTA
+            row.addWidget(flat_btn)
+
+        container = QWidget()
+        container.setLayout(row)
+        return container
+
+    def _build_actions(self) -> tuple[list[QPushButton], list[QPushButton]]:
+        """建 7 个动作按钮，并按「左侧主要 / 右侧降级」分组。
+
+        分组不是样式细节：`primary` 属性让"开始转换"成为唯一主 CTA（工具规则
+        `primary-action`），`flat` 属性把三个低频动作降权，用户一眼知道该点哪个。
+
+        Returns:
+            tuple[list[QPushButton], list[QPushButton]]: （左侧按钮, 右侧降级按钮）。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
         pick_btn = QPushButton(tr("ui.button.add"))
         pick_btn.clicked.connect(self._pick_files)
+
         self._convert_btn = QPushButton(tr("ui.button.start"))
         self._convert_btn.clicked.connect(self._start)
+        self._convert_btn.setProperty("primary", True)
+        self._convert_btn.setDefault(True)
+
         self._cancel_btn = QPushButton(tr("ui.button.cancel"))
         self._cancel_btn.clicked.connect(self._cancel)
         self._cancel_btn.setEnabled(False)
+
         self._retry_btn = QPushButton(tr("ui.button.retry"))
         self._retry_btn.setToolTip(tr("ui.button.retry_tip"))
         self._retry_btn.setEnabled(False)  # 没有失败项就没得重试
@@ -217,44 +387,149 @@ class MainWindow(QMainWindow):
         save_btn = QPushButton(tr("ui.button.save_as"))
         save_btn.setToolTip(tr("ui.button.save_as_tip"))
         save_btn.clicked.connect(self._save_selected)
+
         self._copy_btn = QPushButton(tr("ui.button.copy_error"))
         self._copy_btn.clicked.connect(self._copy_error)
+
         clear_btn = QPushButton(tr("ui.button.clear"))
         clear_btn.clicked.connect(self._clear)
 
-        first_row = QHBoxLayout()
-        for btn in (pick_btn, self._convert_btn, self._cancel_btn, self._retry_btn):
-            first_row.addWidget(btn)
-        second_row = QHBoxLayout()
-        for btn in (save_btn, self._copy_btn, clear_btn):
-            second_row.addWidget(btn)
+        leading = [pick_btn, self._convert_btn, self._cancel_btn, self._retry_btn]
+        return leading, [save_btn, self._copy_btn, clear_btn]
 
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.addWidget(QLabel(tr("ui.list.hint")))
-        left_layout.addWidget(self._list, 1)
-        left_layout.addLayout(first_row)
-        left_layout.addLayout(second_row)
+    def _build_preview_pane(self) -> QWidget:
+        """右栏：头部条（文件名 + 标签 + 复制）+ 只读文本区。
 
-        self._preview = QPlainTextEdit()
-        self._preview.setReadOnly(True)
-        self._preview.setPlaceholderText(tr("ui.preview.placeholder"))
+        `_preview` 仍是 `QPlainTextEdit` 并且**直接**放在这个容器里 —— 既有测试用
+        `window._preview.toPlainText()` 断言内容，换成 `QTextBrowser` 之类会连带改测试。
 
-        self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._splitter.addWidget(left)
-        self._splitter.addWidget(self._preview)
-        self._splitter.setSizes([380, 600])
+        Returns:
+            QWidget: 预览容器。
 
-        self._progress = QProgressBar()
-        self._progress.setValue(0)
-        self._status = QLabel(tr("ui.status.ready"))
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        pane = QWidget()
+        layout = QVBoxLayout(pane)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.addWidget(self._splitter, 1)
-        layout.addWidget(self._progress)
-        layout.addWidget(self._status)
-        self.setCentralWidget(central)
+        self._preview_name = QLabel(tr("ui.preview.empty"))
+        self._preview_name.setObjectName("previewName")
+        tag = QLabel(tr("ui.preview.kind"))
+        tag.setProperty("kind", "hint")
+
+        self._copy_md_btn = QPushButton(tr("ui.button.copy"))
+        self._copy_md_btn.setToolTip(tr("ui.preview.copy_tip"))
+        self._copy_md_btn.setProperty("flat", True)
+        self._copy_md_btn.clicked.connect(self._copy_preview)
+
+        head = QHBoxLayout()
+        head.setContentsMargins(10, 8, 10, 8)
+        head.setSpacing(10)
+        head.addWidget(self._preview_name, 1)
+        head.addWidget(tag)
+        head.addWidget(self._copy_md_btn)
+
+        bar = QWidget()
+        bar.setObjectName("previewBar")
+        bar.setLayout(head)
+
+        layout.addWidget(bar)
+        layout.addWidget(self._preview, 1)
+        return pane
+
+    def _copy_preview(self) -> None:
+        """把预览区全文复制到剪贴板（空内容时不动剪贴板，避免清掉用户原有内容）。"""
+        text = self._preview.toPlainText()
+        if not text:
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(text)
+        self._status.setText(tr("ui.status.copied"))
+
+    def _build_left_pane(self) -> QWidget:
+        """左栏：提示语 + 队列列表。
+
+        提示语从"按钮上方"移到列表上方独立一行——它在原型里承担空列表时的引导作用，
+        不该夹在按钮中间。
+
+        Returns:
+            QWidget: 左栏容器。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        pane = QWidget()
+        layout = QVBoxLayout(pane)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        hint = QLabel(tr("ui.list.hint"))
+        hint.setProperty("kind", "muted")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        # 列表与空状态卡叠在一起：用 QStackedWidget 而不是"显示/隐藏两个控件"，
+        # 因为后者在布局里会留下空白占位，看起来像列表被压扁了。
+        self._left_stack = QStackedWidget()
+        self._left_stack.addWidget(self._list)
+        self._left_stack.addWidget(self._build_empty_state())
+        layout.addWidget(self._left_stack, 1)
+        return pane
+
+    def _build_empty_state(self) -> QWidget:
+        """队列为空时显示的引导卡（虚线边框 + 大标题 + 快捷键）。
+
+        Returns:
+            QWidget: 空状态卡。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        card = QWidget()
+        card.setObjectName("emptyState")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(10)
+
+        kicker = QLabel(tr("ui.empty.kicker"))
+        kicker.setProperty("kind", "accent")
+        title = QLabel(tr("ui.empty.title"))
+        title.setProperty("role", "empty-title")
+        title.setWordWrap(True)
+        desc = QLabel(tr("ui.empty.desc"))
+        desc.setProperty("kind", "muted")
+        desc.setWordWrap(True)
+        keys = QLabel(self._shortcut_hint())
+        keys.setProperty("kind", "hint")
+
+        layout.addStretch(1)
+        for widget in (kicker, title, desc, keys):
+            layout.addWidget(widget)
+        layout.addStretch(1)
+        return card
+
+    @staticmethod
+    def _shortcut_hint() -> str:
+        """空状态里的快捷键提示。
+
+        键位直接写死 `Ctrl+O` / `Ctrl+Enter`，与菜单栏 `_build_menus` 的
+        `setShortcut` 保持一致；走 i18n 的是**动作名**而不是键位本身
+        （键位是平台事实，不翻译）。
+
+        Returns:
+            str: 形如 `Ctrl+O 添加文件 · Ctrl+Enter 开始转换`。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        return "Ctrl+O  %s    ·    Ctrl+Enter  %s" % (
+            tr("ui.empty.key_add"), tr("ui.empty.key_run"))
+
+    def _sync_left_stack(self) -> None:
+        """按队列是否为空切换"列表 / 空状态卡"。"""
+        self._left_stack.setCurrentIndex(0 if self._list.count() else 1)
 
     def _build_menus(self) -> None:
         """菜单栏：文件（添加/清空/打开日志目录/退出）、帮助（关于）。
@@ -339,11 +614,29 @@ class MainWindow(QMainWindow):
                 item = QListWidgetItem(f"{tr('ui.item.pending')}  {candidate.name}")
                 item.setData(Qt.ItemDataRole.UserRole, str(candidate))
                 item.setToolTip(str(candidate))
+                # 图标是"装饰"而不是"信息"：文件名与状态仍全在 text() 里，
+                # 所以既有断言（靠 text() 前缀与 emoji 判断状态）完全不受影响。
+                item.setIcon(icon_for(candidate.suffix, _STATUS_COLORS[self._theme]["fg_3"]))
                 self._list.addItem(item)
                 added += 1
         if added:
             self._status.setText(tr("ui.status.queue", count=self._list.count()))
+            self._refresh_count()
+            self._sync_left_stack()
         return added
+
+    def _refresh_count(self) -> None:
+        """刷新动作条上的「N 项」胶囊。
+
+        只在这一个地方算文案：队列的增（queue_paths）与清（_clear）都走它，
+        免得两处各写一遍格式化逻辑然后慢慢漂移。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        total = self._list.count()
+        key = "ui.count.zero" if total == 0 else "ui.count.items"
+        self._count_label.setText(tr(key, count=total))
 
     def queue_count(self) -> int:
         """队列条目数（供自测与测试断言）。"""
@@ -410,6 +703,74 @@ class MainWindow(QMainWindow):
         if item is None or source is None:
             return
         item.setText(f"{status}  {Path(source).name}{detail}")
+        self._paint_item_status(item, status)
+
+    def _on_system_theme_changed(self) -> None:
+        """系统深浅色切换时的回调：重新套主题，并把已有条目重刷一遍。
+
+        为什么必须重刷：探针实测（2026-10-15）——`setStyleSheet` 后**控件**配色会自动更新，
+        但被 `setForeground` 过的列表项**不会**，图标更是渲染时就固化了颜色。
+        不重刷的话，深色主题下队列里会留着一批"浅色主题的深灰图标"。
+
+        只在 `auto` 模式下响应：用户显式选了浅色/深色时，系统切换不该覆盖他的选择。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        if self._settings.theme != "auto":
+            return
+        self._apply_theme_and_repaint()
+
+    def _apply_theme_and_repaint(self) -> None:
+        """套用当前设置里的主题，并刷新所有依赖主题渲染的界面元素。
+
+        **不重建窗口**：重建会丢掉队列内容、几何与池状态（那才是真麻烦）。
+        主题只影响配色，`setStyleSheet` + 重刷条目的颜色就够。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        self._theme = apply_theme_checked(self._settings.theme)
+        self._repaint_items()
+
+    def _repaint_items(self) -> None:
+        """按当前主题重刷队列里每个条目的图标与状态色。
+
+        遍历是 O(队列长度)：条目数通常几十个，且只在切主题时发生一次，
+        不值得为它做增量跟踪（那会引入"哪一行变了"的状态，反而更容易错）。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        palette = _STATUS_COLORS.get(self._theme, _STATUS_COLORS["light"])
+        for row in range(self._list.count()):
+            item = self._list.item(row)
+            source = self._source_at(row)
+            if item is None or source is None:
+                continue
+            item.setIcon(icon_for(Path(source).suffix, palette["fg_3"]))
+            self._paint_item_status(item, _status_prefix(item.text()))
+
+    def _paint_item_status(self, item: QListWidgetItem, status: str) -> None:
+        """按状态给条目文字上色（颜色之外还有 emoji 与文字，不只靠颜色传信息）。
+
+        为什么上色放在这里而不是各调用点：状态文字只有这一个出口，
+        在出口统一处理才不会漏掉某个分支。i18n 的三种终态都以 emoji 开头，
+        用 startswith 判定比字符串相等更抗文案改动。
+
+        Args:
+            item: 队列条目。
+            status: 已经过 i18n 的状态文字。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        palette = _STATUS_COLORS.get(self._theme, _STATUS_COLORS["light"])
+        for marker, key in _STATUS_TO_COLOR:
+            if status.startswith(marker):
+                item.setForeground(QBrush(QColor(palette[key])))
+                return
+        item.setForeground(QBrush(QColor(palette["fg_3"])))
 
     def _pick_files(self) -> None:
         """选择文件加入队列，起始目录沿用上次的位置。"""
@@ -436,6 +797,9 @@ class MainWindow(QMainWindow):
         self._convert_btn.setEnabled(True)
         self._cancel_btn.setEnabled(False)
         self._retry_btn.setEnabled(False)
+        self._refresh_count()
+        self._sync_left_stack()
+        self._preview_name.setText(tr("ui.preview.empty"))
         self._status.setText(tr("ui.status.cleared"))
 
     # ------------------------------------------------------------------ 转换
@@ -599,7 +963,8 @@ class MainWindow(QMainWindow):
             self._retry_btn.setEnabled(True)
 
         # 警告与失败必须立刻可见：空文件看起来"成功"，失败更不能只躺在日志里
-        note = self._warning_text(outcome) if outcome.ok else _first_line(self._failure_text(outcome))
+        note = (self._warning_text(outcome) if outcome.ok
+                else _first_line(self._failure_text(outcome)))
         if note:
             self._last_note = note
             self._status.setText(note)
@@ -695,6 +1060,7 @@ class MainWindow(QMainWindow):
         outcome = self._outcomes.get(row)
         if outcome is None:
             return
+        self._update_preview_name(row)
         if outcome.ok:
             self._preview.setPlainText(outcome.markdown or self._warning_text(outcome))
             return
@@ -702,6 +1068,19 @@ class MainWindow(QMainWindow):
         self._preview.setPlainText(
             tr("ui.preview.failed", error=self._failure_text(outcome), detail=detail)
         )
+
+    def _update_preview_name(self, row: int) -> None:
+        """把预览头部条的文件名更新成当前选中行。
+
+        Args:
+            row: 队列行号；取不到源路径时保持原标题不动。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        source = self._source_at(row)
+        if source:
+            self._preview_name.setText(Path(source).name)
 
     def _selected_rows(self) -> list[int]:
         """取列表中选中行（升序）；一个都没选中时退回当前行。
@@ -850,15 +1229,66 @@ class MainWindow(QMainWindow):
         任何变化，等于设置没生效；正在转换时不能回收——那会把在跑的任务一起干掉。
 
         @author 康小汪【kxw】
-        @date 2026-10-14
+        @date 2026-10-14（创建）、2026-10-15（T29：外观即时生效 + 语言变化提示重启）
         """
+        language_before = self._settings.language
         if SettingsDialog(self._settings, self).exec() != QDialog.DialogCode.Accepted:
             return
         self._settings.sync()
+        self._apply_theme_and_repaint()  # 外观改动立刻可见，且不重建窗口
         if self._pool is not None and not self._pool.is_busy():
             self._pool.shutdown()
             self._pool = None
+        # 语言没做即时刷新：87 处 `tr()` 里有 26 处在建控件时求值，改了不会自动重跑；
+        # 而"重建窗口"实测会丢掉队列内容（1 → 0 条）。所以这里明确提示需要重启，
+        # 而不是静默地只生效一半（那才是最难排查的状态）。
+        if self._settings.language != language_before:
+            self._announce_language_restart()
+            return
         self._status.setText(tr("ui.status.settings_saved"))
+
+    def _announce_language_restart(self) -> None:
+        """提示界面语言需要重启才生效，并给出「立即重启」的出口。
+
+        为什么给出口而不是干等：用户刚改完设置就想看到变化，只给一行状态栏文字
+        很容易被忽略；给按钮才是"可行动"的提示（工具规则 `error-recovery` 同理：
+        提示要带恢复路径）。
+
+        选「稍后」时把提示落到状态栏 —— 不弹第二次，也不再打断用户。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        language_name = tr("dlg.language_%s" % self._settings.language)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle(tr("ui.confirm.lang_title"))
+        box.setText(tr("ui.confirm.lang_text", language=language_name))
+        restart_btn = box.addButton(tr("ui.confirm.lang_restart"),
+                                    QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(tr("ui.confirm.lang_later"), QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        self._status.setText(tr("ui.status.language_restart"))
+        if box.clickedButton() is restart_btn:
+            self._restart_application()
+
+    def _restart_application(self) -> None:
+        """重启自己：先安全收尾（复用 `close()` 的池回收与几何保存），再拉起新进程。
+
+        为什么用 `close()` 而不是直接 `sys.exit()`：池是长驻线程 + 子进程，
+        不先收干净会让 Qt 直接 qFatal（`closeEvent` 的注释里有实测记录）。
+        新进程用 `sys.executable` 起：冻结包里它就是 exe 自身，源码运行时是 python。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        executable = sys.executable
+        arguments = [] if getattr(sys, "frozen", False) else list(sys.argv)
+        self.close()  # 收池 + 存几何（`closeEvent` 里做的）
+        try:
+            subprocess.Popen([executable, *arguments], close_fds=True)
+        except OSError as exc:
+            _logger.warning("重启失败（不影响当前进程）：%s", exc)
 
     def _about(self) -> None:
         """「关于」：版本、日志目录，日志末尾放进"详细信息"里按需展开。"""
@@ -880,7 +1310,7 @@ class MainWindow(QMainWindow):
 
         网络实测要 5~15 秒，绝不能放在界面线程里（会把窗口冻住）。
 
-        **线程模型是实测选出来的**（见 `_t20_probe4.py`）：
+        **线程模型是实测选出来的**（T20 期间用一次性探针逐条排除）：
 
         * QThread 无论有没有父对象，只要进程退出时还在跑，就会让进程 abort（exit 9）；
         * daemon 线程 + **跳线程 emit Qt 信号**同样不行：跟同进程里的

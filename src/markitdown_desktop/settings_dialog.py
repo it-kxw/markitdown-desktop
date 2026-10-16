@@ -48,6 +48,8 @@ from .settings import (
     LANGUAGE_CHOICES,
     MAX_CONCURRENCY,
     MIN_CONCURRENCY,
+    THEME_AUTO,
+    THEME_CHOICES,
     AppSettings,
 )
 
@@ -108,6 +110,12 @@ class SettingsDialog(QDialog):
         for code in LANGUAGE_CHOICES:
             self._lang_box.addItem(tr(f"dlg.language_{code}"), code)
 
+        # 外观：跟随系统 / 浅色 / 深色。取值集合由 settings 定义（与主题层同源，
+        # tests/test_theme.py 守一致性），这里只负责展示。
+        self._theme_box = QComboBox()
+        for code in THEME_CHOICES:
+            self._theme_box.addItem(tr(f"dlg.theme_{code}"), code)
+
         form = QFormLayout()
         form.addRow(tr("dlg.output_dir_label"), dir_row)
         form.addRow("", self._same_dir)
@@ -116,6 +124,7 @@ class SettingsDialog(QDialog):
         form.addRow("", self._auto_save)
         form.addRow("", self._check_updates)
         form.addRow(tr("dlg.language_label"), self._lang_box)
+        form.addRow(tr("dlg.theme_label"), self._theme_box)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
 
@@ -155,6 +164,7 @@ class SettingsDialog(QDialog):
         self._auto_save.setChecked(settings.auto_save)
         self._check_updates.setChecked(settings.check_updates_on_start)
         self._lang_box.setCurrentIndex(max(self._lang_box.findData(settings.language), 0))
+        self._theme_box.setCurrentIndex(max(self._theme_box.findData(settings.theme), 0))
 
     def _on_same_dir_toggled(self, checked: bool) -> None:
         """勾上「与源文件同目录」就禁用路径框与浏览按钮（不清空已填内容）。
@@ -252,4 +262,5 @@ class SettingsDialog(QDialog):
         self._settings.auto_save = self._auto_save.isChecked()
         self._settings.check_updates_on_start = self._check_updates.isChecked()
         self._settings.language = self._language_value()
+        self._settings.theme = str(self._theme_box.currentData() or THEME_AUTO)
         super().accept()

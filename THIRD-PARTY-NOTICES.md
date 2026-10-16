@@ -75,6 +75,7 @@
 | ONNX Runtime（C++ 部分） | 随 onnxruntime 1.20.1 分发 | MIT | `onnxruntime/capi/onnxruntime.dll` |
 | Mesa（软件 OpenGL 回退） | 随 PySide6-Essentials 6.12.0 分发 | MIT | `_internal/PySide6/opengl32sw.dll`；`MDD_TRIM=aggressive` 裁剪时会被移除 |
 | PyInstaller 引导程序（bootloader） | 随 PyInstaller 6.22.3 分发 | GPL-2.0-or-later 附特别例外 | 已编入 `markitdown-desktop.exe`；例外条款明确允许分发用它打包的程序 |
+| Inter 字体 | 随本程序分发（4 个静态字重，已子集化） | SIL OFL 1.1 | `_internal/fonts/Inter-*.ttf`；正文见 `licenses/inter-OFL.txt`，子集化脚本 `scripts/make_font_subset.py` |
 
 ## 3. Qt / PySide6 的 LGPL-3.0 合规说明
 

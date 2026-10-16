@@ -114,6 +114,15 @@ _NATIVE_COMPONENTS: tuple[tuple[str, str, str, str], ...] = (
         "GPL-2.0-or-later 附特别例外",
         "已编入 `markitdown-desktop.exe`；例外条款明确允许分发用它打包的程序",
     ),
+    (
+        # 字体也是"随包分发的非 Python 组件"，所以放在这张表里 —— 它不出现在任何
+        # wheel 的 dist-info 中，上面的自动扫描永远找不到它。
+        "Inter 字体",
+        "随本程序分发（4 个静态字重，已子集化）",
+        "SIL OFL 1.1",
+        "`_internal/fonts/Inter-*.ttf`；正文见 `licenses/inter-OFL.txt`，"
+        "子集化脚本 `scripts/make_font_subset.py`",
+    ),
 )
 
 _HEADER = """# 第三方软件通告

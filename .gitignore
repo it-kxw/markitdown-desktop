@@ -28,6 +28,11 @@ pyinstaller-build.log
 pyinstaller-build.err.log
 /release-notes.md
 
+# IDE 工程文件（各人本机生成，不入库）
+.idea/
+.vscode/
+*.iml
+
 # CodeGraph 本地索引（每台机器重新生成，不入库）
 .codegraph/
 

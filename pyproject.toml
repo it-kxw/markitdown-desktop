@@ -30,8 +30,15 @@ addopts = "-q"
 # 不靠「必须用 python -m pytest 启动」这种隐含前提（裸 pytest 也要能用）
 pythonpath = ["."]
 # 任何用例挂死时（例如模态框无人点击）自动转储全部线程堆栈并终止进程，
-# 把"静默挂死"变成可见的失败，而不是让 CI 永远转圈
-faulthandler_timeout = 120
+# 把"静默挂死"变成可见的失败，而不是让 CI 永远转圈。
+#
+# 为什么是 90 而不是更大：这个值必须 **小于** 测试自己写的子进程超时，否则
+# faulthandler 先杀掉进程，测试里那段 `except subprocess.TimeoutExpired: pytest.skip(...)`
+# 永远来不及执行 —— 结果是本应 `skipped` 的用例在 `skipped` 与 `errors` 之间漂移
+# （2026-10-15 实测：test_verify_signature 的 4 条先是 skipped、后变 errors）。
+# 本机实测最慢的正常用例：test_selftest_cli 3.33s、test_icon 0.79s（用 --durations 量的），
+# 所以 90s 对正常用例有 27 倍余量，只会抓住真正的挂死。
+faulthandler_timeout = 90
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/markitdown_desktop"]

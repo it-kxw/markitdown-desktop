@@ -42,6 +42,14 @@ DEFAULT_CONCURRENCY = 2
 #: 界面语言的可选值（`auto` = 跟随系统）；非法值一律回退 auto
 LANGUAGE_CHOICES = (LANGUAGE_AUTO, *SUPPORTED_LANGUAGES)
 
+#: 界面外观的可选值。**故意在这里重定义一份而不是 import theme 的同名常量**：
+#: settings 是纯存储层（测试无需起窗口），而 theme 依赖 PySide6 —— 引它会把这个
+#: 依赖传染给所有只读设置的地方。两边取值由 tests/test_theme.py 守一致性。
+THEME_AUTO = "auto"
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
+THEME_CHOICES = (THEME_AUTO, THEME_LIGHT, THEME_DARK)
+
 
 def _as_optional_str(raw: Any) -> str | None:
     """把 QSettings 的返回值收敛成 `str | None`。
@@ -193,6 +201,23 @@ class AppSettings:
     @language.setter
     def language(self, value: str) -> None:
         self._s.setValue("language", value if value in LANGUAGE_CHOICES else LANGUAGE_AUTO)
+
+    @property
+    def theme(self) -> str:
+        """界面外观：`auto`（跟随系统）/ `light` / `dark`；非法值回退 auto。
+
+        与 `language` 同口径：配置文件是外部输入，垃圾值不能中断启动。
+        取值集合用的是本模块自己那份 THEME_*（原因见常量定义的注释）。
+
+        @author 康小汪【kxw】
+        @date 2026-10-15
+        """
+        raw = self._s.value("theme", THEME_AUTO)
+        return raw if raw in THEME_CHOICES else THEME_AUTO
+
+    @theme.setter
+    def theme(self, value: str) -> None:
+        self._s.setValue("theme", value if value in THEME_CHOICES else THEME_AUTO)
 
     @property
     def window_geometry(self) -> bytes | None:

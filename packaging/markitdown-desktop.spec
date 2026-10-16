@@ -148,6 +148,23 @@ def _collect_legal_docs() -> list[tuple[str, str]]:
     return docs
 
 
+def _collect_fonts() -> list[tuple[str, str]]:
+    """收集打包用的 Inter 字体（T29 / D1=(b)）。
+
+    为什么必须随包分发：Inter 不是 Windows 自带字体（实测 `C:\\Windows\\Fonts` 里没有），
+    不打进来的话 `QFontDatabase.addApplicationFont` 会失败 → 静默回落到 Segoe UI，
+    界面就不是设计稿的样子了。
+
+    放到 `_internal/fonts/`（与 exe 同层的子目录），与 `theme.FONT_DIR` 的
+    开发期路径**不同名但同构**：运行时由 `theme.load_fonts()` 按 `sys._MEIPASS` 定位，
+    见那里的注释。文件不存在就返回空表（不能因为缺字体把构建打掉）。
+    """
+    fonts_dir = os.path.join(PROJECT_ROOT, "packaging", "fonts")
+    if not os.path.isdir(fonts_dir):
+        return []
+    return [(fonts_dir, "fonts")]
+
+
 # --------------------------------------------------------------------------
 # 依赖收集
 # --------------------------------------------------------------------------
@@ -159,6 +176,7 @@ datas = list(magika_datas)
 datas += copy_metadata("markitdown")
 datas += copy_metadata("markitdown-desktop")
 datas += _collect_legal_docs()
+datas += _collect_fonts()
 # 图标文件本身也要进包：exe 的图标由上面的 icon= 写进 PE 资源，但**运行时窗口图标**
 # 需要能读到文件（任务栏 / Alt-Tab），所以随 data 一起打包到 _internal 根。
 datas.append((os.path.join(PROJECT_ROOT, "packaging", "icon", "app-icon.ico"), "."))

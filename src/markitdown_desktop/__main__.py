@@ -289,6 +289,10 @@ def _build_report(mode: str, concurrency: int, timeout_s: float) -> dict[str, ob
         "mode": mode,
         "concurrency": concurrency,
         "timeout_s": timeout_s,
+        # 界面契约的实测证据：字体是否真的从包里加载成功。冻结包与源码运行会给出
+        # 不同结果（冻结包走 _MEIPASS），所以必须能被报告出来 —— 否则"字体在包内
+        # 但加载失败"这种静默回落，光看 exe 能不能跑是发现不了的。
+        "ui": _ui_runtime_facts(),
         "timings_s": {},
         "results": [],
     }
@@ -320,6 +324,26 @@ def _open_window(app: QApplication, timings: dict[str, float]) -> MainWindow:
     app.processEvents()
     timings["window_show"] = round(time.perf_counter() - t, 3)
     return window
+
+
+def _apply_early_theme(app: QApplication) -> None:
+    """在**建窗口之前**先套一次主题，避免启动瞬间闪一下系统默认外观。
+
+    为什么不全靠 `MainWindow.__init__`：那里套主题会在窗口已开始构造之后才生效，
+    用户能看到一帧系统灰；启动路径上先套一次就不会。`MainWindow` 里那次仍保留 ——
+    它负责读设置里的实际值（这里用的是默认值），两条路径都要能用。
+
+    @author 康小汪【kxw】
+    @date 2026-10-15
+    """
+    from markitdown_desktop.settings import AppSettings
+    from markitdown_desktop.ui import apply_theme_checked
+
+    try:
+        theme = AppSettings().theme
+    except Exception:  # noqa: BLE001 - 读设置失败不该挡住启动
+        theme = "auto"
+    apply_theme_checked(theme)
 
 
 def _apply_app_icon(app: QApplication) -> None:
@@ -378,7 +402,9 @@ def _run_selftest(
     t = time.perf_counter()
     app = QApplication.instance() or QApplication(sys.argv[:1])
     timings["qt_init"] = round(time.perf_counter() - t, 3)
+    _fill_font_families(report)  # Qt 已就绪，可以问 QFontDatabase 了
     _apply_app_icon(app)
+    _apply_early_theme(app)
     window = _open_window(app, timings)
 
     # pool 模式不建父进程引擎（发布版路径），子进程成本另由 pool_* 两个字段量化；
@@ -398,6 +424,55 @@ def _run_selftest(
     _write_report(report, json_path)
     window.close()
     return 0 if report["ok"] else 1
+
+
+def _ui_runtime_facts() -> dict[str, object]:
+    """采集界面契约的运行时事实：字体目录是否存在、主题取值集合。
+
+    **刻意不在这里调 `load_fonts()`**：本函数在 `QApplication` 创建**之前**运行
+    （`_build_report` 早于 Qt 初始化），而 `QFontDatabase.addApplicationFont` 需要
+    已初始化的 Qt —— 实测直接崩（退出码 `0xC0000005` 访问违例）。
+    字体族的采集放到 `_fill_font_families()`，由 Qt 起来之后再调用。
+
+    为什么仍要放进报告：字体加载失败是**静默**的（回落 Segoe UI，界面照样能用），
+    只在源码环境验证等于没验证。让冻结包把这件事说出来，才能一眼看出包是否完整。
+
+    Returns:
+        dict[str, object]: 含 `font_dir` / `font_dir_exists` / `themes`。
+
+    @author 康小汪【kxw】
+    @date 2026-10-15
+    """
+    facts: dict[str, object] = {}
+    try:
+        from markitdown_desktop import theme
+
+        facts["font_dir"] = str(theme.FONT_DIR)
+        facts["font_dir_exists"] = theme.FONT_DIR.is_dir()
+        facts["themes"] = list(theme.THEME_CHOICES)
+    except Exception as exc:  # noqa: BLE001 - 自测报告不许因为采集失败而中断
+        facts["error"] = "%s: %s" % (type(exc).__name__, exc)
+    return facts
+
+
+def _fill_font_families(report: dict[str, object]) -> None:
+    """Qt 起来之后，把"实际加载到的字体族"补进报告的 `ui` 段。
+
+    Args:
+        report: 自测报告字典（就地修改）。
+
+    @author 康小汪【kxw】
+    @date 2026-10-15
+    """
+    ui = report.get("ui")
+    if not isinstance(ui, dict):
+        return
+    try:
+        from markitdown_desktop import theme
+
+        ui["font_families"] = sorted(set(theme.load_fonts()))
+    except Exception as exc:  # noqa: BLE001 - 同上：采集失败不影响自测结论
+        ui["font_error"] = "%s: %s" % (type(exc).__name__, exc)
 
 
 def _write_report(report: dict[str, object], json_path: str | None) -> None:
@@ -471,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication(sys.argv)
     _apply_app_icon(app)
+    _apply_early_theme(app)
     window = MainWindow()
     window.show()
     return app.exec()
