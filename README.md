@@ -24,15 +24,15 @@
 
 | 方式 | 文件 | 大小 | 说明 |
 | --- | --- | --- | --- |
-| **安装包（推荐）** | [`MarkItDownDesktop-0.1.1-setup.exe`](https://github.com/it-kxw/markitdown-desktop/releases/download/v0.1.1/MarkItDownDesktop-0.1.1-setup.exe) | 64.32 MB | 装到用户目录，**免 UAC**；带开始菜单项与卸载程序 |
-| **免安装 zip** | [`MarkItDownDesktop-0.1.1-portable.zip`](https://github.com/it-kxw/markitdown-desktop/releases/download/v0.1.1/MarkItDownDesktop-0.1.1-portable.zip) | 93.20 MB | 解压后双击 `markitdown-desktop.exe`，不写注册表 |
+| **安装包（推荐）** | [`MarkItDownDesktop-0.1.2-setup.exe`](https://github.com/it-kxw/markitdown-desktop/releases/download/v0.1.2/MarkItDownDesktop-0.1.2-setup.exe) | 64.50 MB | 装到用户目录，**免 UAC**；带开始菜单项与卸载程序 |
+| **免安装 zip** | [`MarkItDownDesktop-0.1.2-portable.zip`](https://github.com/it-kxw/markitdown-desktop/releases/download/v0.1.2/MarkItDownDesktop-0.1.2-portable.zip) | 93.52 MB | 解压后双击 `markitdown-desktop.exe`，不写注册表 |
 
 👉 **[前往 Releases 下载最新版](https://github.com/it-kxw/markitdown-desktop/releases/latest)**
 
 **首次运行被 SmartScreen 拦了？** 点「更多信息」→「仍要运行」即可。安装包**当前未做代码签名**（原因与后续计划见[已知边界](#已知边界)），Release 说明里附了**真实产物的 SHA-256**，可以先校验再运行：
 
 ```powershell
-Get-FileHash .\MarkItDownDesktop-0.1.1-setup.exe -Algorithm SHA256
+Get-FileHash .\MarkItDownDesktop-0.1.2-setup.exe -Algorithm SHA256
 ```
 
 ## 它解决什么问题
@@ -191,7 +191,7 @@ html / csv / json / xml / txt 共 9 个），**不引入新依赖**，CI 也不�
 安装包与免安装 zip 只在手动触发并勾选 `full` 时构建。
 
 打 `v*` tag 时 `.github/workflows/release.yml` 会出安装包 + 免安装 zip 并挂到 Release。
-该工作流已在 `v0.1.0` / `v0.1.1` 上**真跑通过**，且是**幂等**的——同一个 tag 重跑会覆盖附件、更新说明，不会因为「Release 已存在」失败。
+该工作流已在 `v0.1.0` / `v0.1.1` / `v0.1.2` 上**真跑通过**，且是**幂等**的——同一个 tag 重跑会覆盖附件、更新说明，不会因为「Release 已存在」失败。
 
 ## 项目结构
 
