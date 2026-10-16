@@ -168,77 +168,16 @@ powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1
 
 ## 未来计划
 
-按「值不值得做」排序。这份清单是**自包含**的（不依赖仓库里的其它文件，因为公开分支只含
-运行需要的代码，不含开发文档）。
-
-### 在做 / 等外部条件
-
-| 事项 | 状态 |
-| --- | --- |
-| **代码签名**（SignPath Foundation）| 已提交申请，等回复 |
-| **winget 上架** | `0.1.1` 的 PR 已提（`microsoft/winget-pkgs#453256`）；`0.1.2` 待提 |
-| **GUI 手动走查**（11 个场景）| 待做（纯黑观感、中英混排、安装流程）|
-
 ### 下一步候选
 
 | 优先级 | 事项 | 说明 |
 | --- | --- | --- |
-| **P1** | **URL 输入** | 上游的远程文件 / 网页 / YouTube / RSS / Wikipedia 输入。**转换器都已在包里，只缺入口** —— 一次改动能点亮 5 个能力。⚠️ **但会让程序联网**，与"文件不出本机"的定位冲突，需要先定隐私口径 |
+| **P1** | **URL 输入** | 上游的远程文件 / 网页 / YouTube / RSS / Wikipedia 输入。**转换器都已在包里，只缺入口** —— 一次改动能点亮 5 个能力。 |
 | **P2** | 插件机制 | `enable_plugins` 目前是死参数；且冻结包里没有插件可装，entry point 发现未实测 |
-| **P2** | 音频转写默认可用 | 需要 31 MB 级依赖 + ffmpeg，有体积回退风险（闸门：安装包 ≤75 MB，当前 64.5 MB）|
+| **P2** | 音频转写默认可用 | 需要 31 MB 级依赖 + ffmpeg |
 | **P2** | 图片 OCR / EXIF | 需要 exiftool 二进制或 LLM 密钥 |
-| **P3** | 图片描述 / Azure DocIntel / Content Understanding | 需要密钥与计费，与"隐私优先"路线有张力（视频是唯一必须走 Azure 的格式）|
+| **P3** | 图片描述 / Azure DocIntel / Content Understanding | 需要密钥与计费 |
 | **P4** | 转换 CLI（`-o`、`--extension` 等）| 本仓 CLI 目前只用于自检；加转换能力与"GUI 应用"定位有张力 |
-
-### 明确不做的
-
-| 项 | 理由 |
-| --- | --- |
-| 自动更新（下载 + 静默升级）| 涉及 UAC 与回滚，风险大于收益 |
-| 换 UI 技术栈（QML / 第三方主题库）| 已定案；且加体积、测试全废 |
-| 插件市场 / 右键菜单 / 输出模板 | 依赖插件机制先可用 |
-
-## ⚠️ 必须知道的坑：shiboken6 × `six.moves` 导入顺序冲突
-
-**症状**：PySide6 先于 pandas 导入时程序直接崩溃。
-
-```powershell
-python -c "from PySide6.QtWidgets import QApplication; import pandas"
-```
-
-**原因**：shiboken6 的导入钩子会调 `inspect.getsource()`，触发 `six` 的元路径导入器
-`AttributeError: '_SixMetaPathImporter' object has no attribute '_path'`。冻结包里因为
-`pyi_rth_pyside6` 会提前导入 PySide6，问题更隐蔽。
-
-**处理**：`_compat.py` 给 `six._importer` 补 `_path`（与导入顺序无关，源码与冻结包同时生效），
-并保留"先 pandas 后 PySide6"的顺序作第二道保险。若你也遇到，建议一并向上游 PySide6 报障。
-
-## 关于代码注释里的 `docs/...` 引用
-
-源码与工作流的注释里会看到 `见 docs/p2-verification.md §15`、`见 docs/code-signing.md`
-这类**溯源引用**（"这条结论的实测记录在哪"）。
-
-**这些外部文档不在本仓库的公开分支里** —— 公开分支只放"运行与构建需要的文件"
-（`src/`、`packaging/`、`scripts/`、`.github/`、`licenses/` 等），开发过程的文档、
-测试与证据 JSON 都不在其中。
-
-保留这些引用是有意的：它们记录了每个"看起来奇怪的实现"背后的实测依据
-（本项目的很多决策来自探针实测而不是推测，例如字体为什么分两个目录、
-为什么 `faulthandler_timeout` 是 90）。读者顺着这些标注能看到**判断的来路**，
-而不是只看到结论。**缺失的是文档，不是功能。**
-
-## 复现构建与验证
-
-```cmd
-REM 转换 → 写盘 → 失败路径全流程
-.venv\Scripts\python.exe scripts\p0_verify.py
-
-REM 冻结包行为验证（超时硬杀 / 失败隔离 / 日志 / 无残留进程），输出 p1-verify.json
-.venv\Scripts\python.exe scripts\p1_verify.py
-
-REM 冒烟矩阵：源码/冻结 × 并发 1/2，逐文件字符数一致性
-.venv\Scripts\python.exe scripts\smoke_matrix.py
-```
 
 ### CI（GitHub Actions）
 
