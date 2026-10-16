@@ -35,6 +35,7 @@ from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QGuiApplica
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -52,7 +53,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
-from ._compat import icon_path
+from ._compat import donate_dir, icon_path
 from .engine import ConversionEngine, ConversionOutcome
 from .icons import icon_for
 from .i18n import FALLBACK_LANGUAGE, LANGUAGE_AUTO, normalize_language, set_language, tr
@@ -64,6 +65,14 @@ from .update_check import STATUS_AVAILABLE, STATUS_LATEST, UpdateResult, check_f
 from .worker import ConversionPool, JobSpec, is_retryable
 
 _logger = logging.getLogger(__name__)
+
+#: 打赏收款码的文件名（与 packaging/donate/ 下的产物一致；压缩与生成见
+#: scripts/make_donate_qr.py）
+_DONATE_ZFB = "zfb.jpg"
+_DONATE_WX = "wx.jpg"
+#: 收款码在对话框里的显示边长（px）。原图 480px 宽，缩到 220px 仍够扫，
+#: 且对话框不会被撑得很大。
+_DONATE_DISPLAY_PX = 220
 
 
 def _status_prefix(text: str) -> str:
@@ -561,8 +570,11 @@ class MainWindow(QMainWindow):
         update_action.triggered.connect(lambda: self._check_updates(manual=True))
         about_action = QAction(tr("ui.menu.about"), self)
         about_action.triggered.connect(self._about)
+        donate_action = QAction(tr("ui.menu.donate"), self)
+        donate_action.triggered.connect(self._show_donate)
         help_menu.addAction(update_action)
         help_menu.addSeparator()
+        help_menu.addAction(donate_action)
         help_menu.addAction(about_action)
 
     def _restore_state(self) -> None:
@@ -1302,6 +1314,83 @@ class MainWindow(QMainWindow):
         box.setInformativeText(tr("ui.about.log_dir", path=log_dir()))
         box.setDetailedText(tail_log(_ABOUT_LOG_LINES) or tr("ui.about.no_logs"))
         box.exec()
+
+    def _show_donate(self) -> None:
+        """「请作者喝杯咖啡」：显示收款码。
+
+        为什么做成独立对话框而不是主界面按钮：打赏是**低频且与工作流无关**的行为，
+        放在动作条上会干扰真正的任务（本项目的界面原则是"一个主按钮"）。
+        放帮助菜单里既找得到，又不打扰。
+
+        读不到图时**不弹空框**：只给一段文字说明（精简环境或源码直跑可能没有这两张图）。
+
+        @author 康小汪【kxw】
+        @date 2026-10-16
+        """
+        box = QDialog(self)
+        box.setWindowTitle(tr("ui.donate.title"))
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(10)
+
+        intro = QLabel(tr("ui.donate.intro") + "\n" + tr("ui.donate.optional"))
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        codes = self._build_donate_codes()
+        if codes is None:
+            layout.addWidget(QLabel(tr("ui.donate.missing")))
+        else:
+            layout.addWidget(codes)
+            hint = QLabel(tr("ui.donate.hint"))
+            hint.setProperty("kind", "hint")
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(box.reject)
+        buttons.accepted.connect(box.accept)
+        layout.addWidget(buttons)
+        box.exec()
+
+    def _build_donate_codes(self) -> QWidget | None:
+        """把两张收款码排成一行；一张都读不到时返回 None。
+
+        Returns:
+            QWidget | None: 含两张码的容器；无图时 None（调用方据此降级）。
+
+        @author 康小汪【kxw】
+        @date 2026-10-16
+        """
+        row = QHBoxLayout()
+        row.setSpacing(18)
+        found = False
+        for filename, label_key in ((_DONATE_ZFB, "ui.donate.zfb"), (_DONATE_WX, "ui.donate.wx")):
+            path = donate_dir() / filename
+            if not path.is_file():
+                continue
+            pixmap = QPixmap(str(path))
+            if pixmap.isNull():
+                continue
+            found = True
+            column = QVBoxLayout()
+            column.setSpacing(6)
+            caption = QLabel(tr(label_key))
+            caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image = QLabel()
+            # 按显示尺寸缩放：原图是 480px 宽，显示 220px 足够扫码且不撑大对话框
+            image.setPixmap(pixmap.scaled(_DONATE_DISPLAY_PX, _DONATE_DISPLAY_PX,
+                                          Qt.AspectRatioMode.KeepAspectRatio,
+                                          Qt.TransformationMode.SmoothTransformation))
+            image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            column.addWidget(caption)
+            column.addWidget(image)
+            row.addLayout(column)
+        if not found:
+            return None
+        container = QWidget()
+        container.setLayout(row)
+        return container
 
     # ------------------------------------------------------------------ 更新检查
 

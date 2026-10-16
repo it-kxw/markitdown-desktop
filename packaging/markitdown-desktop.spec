@@ -165,6 +165,20 @@ def _collect_fonts() -> list[tuple[str, str]]:
     return [(fonts_dir, "fonts")]
 
 
+def _collect_donate() -> list[tuple[str, str]]:
+    """收集打赏收款码（随包分发；界面里「请作者喝杯咖啡」会显示）。
+
+    只收 `packaging/donate` 下的 jpg，**不含 SOURCES.md**（那是构建说明，不该进包）。
+    与 `_collect_fonts` 同一口径：目录不存在就返回空表，不因为缺资源把构建打掉
+    （界面侧会优雅降级：读不到图就不显示对话框内容）。
+    """
+    donate_dir = os.path.join(PROJECT_ROOT, "packaging", "donate")
+    if not os.path.isdir(donate_dir):
+        return []
+    images = [f for f in os.listdir(donate_dir) if f.lower().endswith(".jpg")]
+    return [(os.path.join(donate_dir, name), "donate") for name in sorted(images)]
+
+
 # --------------------------------------------------------------------------
 # 依赖收集
 # --------------------------------------------------------------------------
@@ -177,6 +191,7 @@ datas += copy_metadata("markitdown")
 datas += copy_metadata("markitdown-desktop")
 datas += _collect_legal_docs()
 datas += _collect_fonts()
+datas += _collect_donate()
 # 图标文件本身也要进包：exe 的图标由上面的 icon= 写进 PE 资源，但**运行时窗口图标**
 # 需要能读到文件（任务栏 / Alt-Tab），所以随 data 一起打包到 _internal 根。
 datas.append((os.path.join(PROJECT_ROOT, "packaging", "icon", "app-icon.ico"), "."))

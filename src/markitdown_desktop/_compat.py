@@ -85,6 +85,26 @@ def preload_heavy_deps() -> None:
         assert hasattr(sys.modules["six"]._importer, "_path")
 
 
+def donate_dir() -> Path:
+    """返回打赏收款码所在目录：冻结包取 `_MEIPASS/donate`，源码运行取 `packaging/donate`。
+
+    为什么走 `_compat`：这是**冻结包路径**问题，与 `icon_path()` 同一类。
+    直接用 `__file__` 的相对路径在冻结后会指到临时解包目录外面（字体当初就踩过这个坑，
+    见 `theme._font_dir` 的注释）。
+
+    @author 康小汪【kxw】
+    @date 2026-10-16
+
+    Returns:
+        Path: 目录路径。调用方仍需自行判断文件是否存在：精简环境或源码直跑时
+        可能没有这两张图，此时应降级而不是让界面起不来。
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / "donate"
+    return Path(__file__).resolve().parents[2] / "packaging" / "donate"
+
+
 def icon_path() -> Path:
     """返回应用图标 ICO 的路径：冻结包取 _MEIPASS，源码运行取仓库 packaging/icon。
 

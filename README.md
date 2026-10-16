@@ -62,6 +62,7 @@ Get-FileHash .\MarkItDownDesktop-0.1.2-setup.exe -Algorithm SHA256
 | 深色模式 | 跟随系统 / 浅色 / 深色三态，设置里随时切换 |
 | 界面清爽 | 顶部动作条、文件类型图标、状态配色、空状态引导卡；一个主按钮，其余降级 |
 | 设置自动记住 | 输出目录、命名规则、并发数、界面语言、外观，改完即生效并持久化 |
+| 打赏入口 | 帮助菜单里的「请作者喝杯咖啡」；完全自愿，不弹窗、不影响功能 |
 | 出错可排查 | 失败原因写入本地日志，可一键导出；只记路径与原因，不记文件内容 |
 
 ## 支持的格式
@@ -148,6 +149,16 @@ powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1
 
 这套结构还顺带解决了两件事：**主程序被强杀**（含启动瞬间）时，worker 会在 1~2 s 内自退，不留孤儿进程；并发每 +1 约多占 140 MB 内存。
 
+## 关于打赏
+
+**帮助 → 请作者喝杯咖啡** 里有两张收款码（支付宝 / 微信）。
+
+完全自愿，**不影响任何功能**，也不会有弹窗提示。这个软件是免费开源的（MIT），
+收不收得到打赏都不改变这一点。
+
+> 收款码是压缩过的（480px 宽，见 `packaging/donate/SOURCES.md`）：one-folder 体积贴着
+> 213 MB 闸门，原图 295 KB 压到 101 KB。
+
 ## 已知边界
 
 没做、或没验证的，这里不写成"已支持"：
@@ -206,6 +217,8 @@ src/markitdown_desktop/
   _child.py          # 子进程入口（零 Qt 导入）+ 父进程看门狗
   settings.py        # AppSettings：输出目录/命名策略/并发度/窗口几何/语言 持久化
   i18n.py            # 中英字符串表（零 Qt、零第三方依赖，子进程不导入）
+  theme.py           # 主题：语义色板 + 圆角标尺 + 字体注册 + QSS 生成
+  icons.py           # 队列条目的类型图标（按扩展名映射，QSvgRenderer 画，零依赖）
   logging_setup.py   # 日志落盘 + 全局异常钩子 + 一键导出
   settings_dialog.py # 设置对话框
   ui.py              # MainWindow：拖拽队列 + 进程池 + 取消 + 预览 + 关闭确认
@@ -218,10 +231,18 @@ packaging/
   release-notes.md         # Release 说明模板（体积与 SHA-256 由真实产物填充）
   languages/               # 简体中文向导语言文件（Inno 自带语言里没有中文）
   icon/                    # 应用图标（矢量源 + ICO）
+  fonts/                   # Inter 字体（子集化后的 4 个字重，随包分发）
+  fonts-src/               # 完整字重（不进包，供 make_font_subset.py 重跑）
+  donate/                  # 打赏收款码（压缩后随包分发，见下方「关于打赏」）
+  winget/                  # winget 清单（4 个 YAML，schema 1.12.0）
 scripts/
   build_installer.ps1        # 一键：PyInstaller → Inno Setup → 体积检查
   build_portable.ps1         # 一键：PyInstaller → 补合规文件 → Deflate zip → 体积检查
   gen_third_party_notices.py # 生成 THIRD-PARTY-NOTICES.md + licenses/
+  make_icon.py               # 从 SVG 生成 ICO（--check 守漂移）
+  make_font_subset.py        # 子集化 Inter 字体（--check 守漂移）
+  make_donate_qr.py          # 压缩打赏收款码（--check 守漂移）
+  update_winget_manifest.py  # 一条命令更新 winget 清单（发版后跑）
   p0_verify.py / p1_verify.py # 转换→写盘→失败路径 / 冻结包行为验证
   smoke_matrix.py            # 源码/冻结 × 并发 1/2 冒烟矩阵，逐文件比对字符数
 THIRD-PARTY-NOTICES.md     # 【生成物，勿手改】第三方通告

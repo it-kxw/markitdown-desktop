@@ -81,6 +81,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ui.menu.quit": "退出",
         "ui.menu.help": "帮助",
         "ui.menu.about": "关于",
+        "ui.menu.donate": "请作者喝杯咖啡",
+        "ui.donate.title": "请作者喝杯咖啡",
+        "ui.donate.intro": "MarkItDown Desktop 是免费开源的，如果它帮到了你，"
+                           "可以请作者喝杯咖啡。",
+        "ui.donate.optional": "完全自愿，不影响任何功能。",
+        "ui.donate.zfb": "支付宝",
+        "ui.donate.wx": "微信",
+        "ui.donate.hint": "扫码或保存图片后识别都可以。",
+        "ui.donate.missing": "收款码图片不可用（精简环境或源码运行时可能出现）。",
         "ui.menu.check_update": "检查更新…",
         # ---- 队列与通用状态 ----
         "ui.status.queue": "队列 {count} 个文件",
@@ -227,6 +236,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ui.menu.quit": "Exit",
         "ui.menu.help": "Help",
         "ui.menu.about": "About",
+        "ui.menu.donate": "Buy the author a coffee",
+        "ui.donate.title": "Buy the author a coffee",
+        "ui.donate.intro": "MarkItDown Desktop is free and open source. "
+                           "If it helped you, you can buy the author a coffee.",
+        "ui.donate.optional": "Entirely optional — it does not affect any feature.",
+        "ui.donate.zfb": "Alipay",
+        "ui.donate.wx": "WeChat",
+        "ui.donate.hint": "Scan the code, or save the image and scan from your gallery.",
+        "ui.donate.missing": "The payment QR images are not available (this can happen in a trimmed build or when running from source).",
         "ui.menu.check_update": "Check for updates…",
         # ---- queue and general status ----
         "ui.status.queue": "{count} file(s) in queue",
